@@ -45,6 +45,18 @@ test('a stroke set by the coach decides the family', () => {
   assert.ok(Math.abs(r.rate - 50) < 1.5);
 });
 
+test('thin lane (seen from the side): fast splashing is still freestyle', () => {
+  // Arms alternate, but the swing across the lane can't be seen.
+  const s = splash({ cyclesPerMin: 44, alternating: true }).map((p) => ({ ...p, y: 0 }));
+  assert.equal(analyzeStrokes(s, 0, 12).family, 'simultaneous', 'without the hint it looks like fly/breast');
+  const r = analyzeStrokes(s, 0, 12, null, { lateral: false });
+  assert.equal(r.family, 'alternating');
+  assert.ok(Math.abs(r.rate - 44) < 1.5, `got ${r.rate}`);
+  // A genuine breaststroke tempo stays fly/breast.
+  const b = splash({ cyclesPerMin: 38, alternating: false });
+  assert.equal(analyzeStrokes(b, 0, 12, null, { lateral: false }).family, 'simultaneous');
+});
+
 test('no rhythm in plain noise', () => {
   const rand = rng(9);
   const s = Array.from({ length: 300 }, (_, i) => ({ t: i / 25, e: 20 + 10 * rand(), y: 0.05 * rand() }));

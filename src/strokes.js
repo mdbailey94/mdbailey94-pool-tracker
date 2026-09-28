@@ -13,6 +13,7 @@
 export const FS = 20; // Hz, analysis sample rate
 const MIN_PERIOD = 0.4; // s between splash pulses (fast freestyle)
 const MAX_PERIOD = 2.6; // s (slow breaststroke)
+const SINGLE_ARM_MAX = 0.85; // s: quicker than this can't be a fly/breast cycle
 
 export const STROKES = {
   auto: { label: 'Auto', family: null },
@@ -132,9 +133,13 @@ function pooledAutocorr(rs, key, maxLag) {
 // Analyse samples [{ t, e (energy), y (lateral offset) }] between t0 and t1.
 // Samples with e = NaN (e.g. while two swimmers overlap) split the data into
 // separate runs. `family` forces 'alternating' / 'simultaneous' when the coach
-// has set the stroke. Returns { entryPeriod, cyclePeriod, rate, family, auto,
-// strength } or null when there is no clear rhythm.
-export function analyzeStrokes(samples, t0, t1, family = null) {
+// has set the stroke. `lateral: false` means the lane is too thin on screen
+// to see the splash change sides (a camera beside the pool squashes the
+// across-lane direction): a clear swing still counts, but its absence is not
+// taken as fly/breast; the tempo decides instead. Returns { entryPeriod,
+// cyclePeriod, rate, family, auto, strength } or null when there is no clear
+// rhythm.
+export function analyzeStrokes(samples, t0, t1, family = null, { lateral = true } = {}) {
   const rs = runs(samples, t0, t1);
   const maxLag = Math.round((MAX_PERIOD + 0.3) * FS);
   const re = pooledAutocorr(rs, 'e', maxLag);
@@ -153,7 +158,11 @@ export function analyzeStrokes(samples, t0, t1, family = null) {
     if (at(re, P / 2) > 0.2 && swing(P / 2) > 0.25 && P / 2 >= MIN_PERIOD * FS) {
       P /= 2; fam = 'alternating';
     } else {
-      fam = swing(P) > 0.25 ? 'alternating' : 'simultaneous';
+      const alternating = swing(P) > 0.25
+        // Splashes this often (> ~70 a minute) are single arms: no fly or
+        // breaststroke cycle is that quick.
+        || (!lateral && P / FS < SINGLE_ARM_MAX);
+      fam = alternating ? 'alternating' : 'simultaneous';
     }
   } else if (fam === 'alternating' && P / FS > 1.25 && P / 2 >= MIN_PERIOD * FS) {
     P /= 2; // too slow for one arm: it's the full cycle

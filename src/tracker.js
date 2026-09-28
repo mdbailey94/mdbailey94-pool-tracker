@@ -127,8 +127,9 @@ class Track {
 
 // All swimmers in one lane. `maxSwimmers` > 1 for circle swimming.
 export class LaneTracker {
-  constructor({ lane, length, maxSwimmers = 1, stroke = 'auto' }) {
+  constructor({ lane, length, maxSwimmers = 1, stroke = 'auto', lateral = true }) {
     this.lane = lane;
+    this.lateral = lateral;
     this.L = length;
     this.max = maxSwimmers;
     this.stroke = stroke;
@@ -162,7 +163,7 @@ export class LaneTracker {
         : null);
     }
     if (!s) {
-      s = new Swimmer({ lane: this.lane, slot: this.swimmers.length, length: this.L, stroke: this.stroke });
+      s = new Swimmer({ lane: this.lane, slot: this.swimmers.length, length: this.L, stroke: this.stroke, lateral: this.lateral });
       s.clockStart = this.clockStart;
       this.swimmers.push(s);
     }

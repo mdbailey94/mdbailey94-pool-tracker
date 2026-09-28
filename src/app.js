@@ -3,7 +3,7 @@
 import { applyH, cornersValid, poolToImage } from './homography.js';
 import { cellIndex } from './grid.js';
 import {
-  PoolSession, formatTime, laneLabel, laneSettings, lengthMetres, sessionCSV, sessionRecord,
+  POOLS, PoolSession, VIEWS, formatTime, laneLabel, laneSettings, lengthMetres, sessionCSV, sessionRecord,
   strokeName, swimmerLabel,
 } from './session.js';
 import { STROKES } from './strokes.js';
@@ -26,12 +26,6 @@ const ctx = overlay.getContext('2d');
 
 // Distinct marker colours for swimmers (lane order), readable on water.
 const COLORS = ['#ffcf33', '#ff6b6b', '#7cf29c', '#ff9f1c', '#c77dff', '#4cc9f0', '#f72585', '#b8f2e6', '#ffd6a5', '#9bf6ff'];
-const CORNER_NAMES = [
-  'Start wall, first-lane side',
-  'Start wall, last-lane side',
-  'Turn wall, last-lane side',
-  'Turn wall, first-lane side',
-];
 
 const state = {
   mode: 'home',
@@ -69,8 +63,10 @@ function showHome() {
     <section class="card">
       <h3>Setting up the camera</h3>
       <ol class="steps">
-        <li><b>Up high, looking down the pool</b> from one end (a stand, balcony or tall tripod). The higher, the better swimmers stay apart.</li>
-        <li><b>Both walls in view</b> — the ends swimmers turn at — and every lane you want to time.</li>
+        <li><b>Beside the pool, up high</b> (a stand, balcony or tall tripod) at the middle of the length, so swimmers go left ↔ right.
+          A wide-angle lens helps fit a 25-yard or 25-metre pool. Looking down the pool from one end works too.</li>
+        <li><b>Both walls in view</b> — the ends swimmers turn at — and every lane you want to time. The higher the camera,
+          the less near lanes hide far ones.</li>
         <li><b>Keep it still</b> and in landscape. Plug in for long sessions.</li>
         <li>Start tracking <b>before</b> swimmers push off: it spends 4 seconds learning the empty water.</li>
       </ol>
@@ -281,11 +277,15 @@ function drawSwimmers(P, snap) {
       }
       const name = swimmerLabel(setup, ln.lane, tr.slot, ln.swimmers.length);
       ctx.font = `600 ${12 * dpr}px system-ui, sans-serif`;
-      ctx.textAlign = 'left';
+      // Label beside the marker, on whichever side has room (swimmers at
+      // the right-hand wall in a side-on view would push it off screen).
+      const room = x + 14 * dpr + ctx.measureText(name).width < overlay.width;
+      const lx = room ? x + 14 * dpr : x - 14 * dpr;
+      ctx.textAlign = room ? 'left' : 'right';
       ctx.lineWidth = 3 * dpr;
       ctx.strokeStyle = 'rgba(0,0,0,.7)';
-      ctx.strokeText(name, x + 14 * dpr, y + 4 * dpr);
-      ctx.fillText(name, x + 14 * dpr, y + 4 * dpr);
+      ctx.strokeText(name, lx, y + 4 * dpr);
+      ctx.fillText(name, lx, y + 4 * dpr);
     }
   }
 }
@@ -336,11 +336,13 @@ function showSetup() {
   panel.innerHTML = `
     <section class="card">
       <h2>Line up the pool</h2>
+      <label class="field">Camera position <select id="view">${Object.entries(VIEWS).map(([k, v]) => `<option value="${k}" ${k === setup.view ? 'selected' : ''}>${v.label}</option>`).join('')}</select></label>
       <p>Drag the dots onto the corners of the water you want to watch, where the outer lane ropes
         (or pool edges) meet the walls:</p>
-      <ol class="corner-key">${CORNER_NAMES.map((n, i) => `<li><span class="corner-dot">${i + 1}</span>${n}</li>`).join('')}</ol>
-      <p class="muted small">Check that the drawn lane lines sit on the lane ropes all the way down.</p>
-      <div class="row">
+      <ol class="corner-key" id="corner-key"></ol>
+      <p class="muted small" id="corner-tip"></p>
+      <label class="field">Pool <select id="pool">${POOLS.map((p) => `<option value="${p.key}">${p.label}</option>`).join('')}<option value="other">Other length…</option></select></label>
+      <div class="row" id="custom-len">
         <label class="field">Pool length <input id="len" type="number" min="10" max="100" step="any" value="${setup.length}"></label>
         <label class="field">Unit <select id="unit"><option value="m">metres</option><option value="yd" ${setup.unit === 'yd' ? 'selected' : ''}>yards</option></select></label>
       </div>
@@ -357,6 +359,36 @@ function showSetup() {
       </div>
     </section>`;
   renderLaneRows();
+  const preset = POOLS.find((p) => p.length === setup.length && p.unit === setup.unit);
+  $('#pool').value = preset ? preset.key : 'other';
+  $('#custom-len').hidden = Boolean(preset);
+  const showCornerKey = () => {
+    const view = VIEWS[setup.view] || VIEWS.end;
+    $('#corner-key').innerHTML = view.names.map((n, i) => `<li><span class="corner-dot">${i + 1}</span>${n}</li>`).join('');
+    $('#corner-tip').textContent = setup.view === 'side'
+      ? 'The walls are the left and right ends. Check that the drawn lane lines sit on the lane ropes all the way across, and the lane numbers match.'
+      : 'Check that the drawn lane lines sit on the lane ropes all the way down.';
+  };
+  showCornerKey();
+  $('#view').addEventListener('change', (ev) => {
+    setup.view = ev.target.value;
+    setup.corners = VIEWS[setup.view].corners.map((c) => [...c]);
+    showCornerKey();
+    saveSetup(setup);
+    checkCorners();
+    draw();
+  });
+  $('#pool').addEventListener('change', (ev) => {
+    const p = POOLS.find((q) => q.key === ev.target.value);
+    $('#custom-len').hidden = Boolean(p);
+    if (!p) return;
+    setup.length = p.length;
+    setup.unit = p.unit;
+    $('#len').value = p.length;
+    $('#unit').value = p.unit;
+    saveSetup(setup);
+    draw();
+  });
   const num = (id, lo, hi, fallback) => {
     const v = Number($(id).value);
     return Number.isFinite(v) && v >= lo && v <= hi ? v : fallback;

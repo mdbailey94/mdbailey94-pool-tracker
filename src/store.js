@@ -27,7 +27,9 @@ function write(key, value) {
 
 export function loadSetup() {
   const saved = read(SETUP_KEY, null);
-  return saved ? { ...defaultSetup(), ...saved, lane: { ...(saved.lane || {}) } } : defaultSetup();
+  if (!saved) return defaultSetup();
+  // Setups saved before the camera position choice were all end-on.
+  return { ...defaultSetup(), view: 'end', ...saved, lane: { ...(saved.lane || {}) } };
 }
 
 export const saveSetup = (setup) => write(SETUP_KEY, setup);

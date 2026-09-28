@@ -1,18 +1,54 @@
 // One tracking session: camera frames in, swimmers' lengths and strokes out.
 // Pure (no DOM), so the whole pipeline can be tested on synthetic video.
 
-import { cornersValid, poolToImage } from './homography.js';
+import { applyH, cornersValid, poolToImage } from './homography.js';
 import { Background, makeGeometry, Rectifier } from './grid.js';
 import { LaneTracker, laneDetections } from './tracker.js';
 import { FAMILY_LABEL, STROKES } from './strokes.js';
 
 export const YARD = 0.9144;
 
+// Below this many pixels across a lane (typical of far lanes seen from the
+// side of the pool) arm splash can't reliably be told left from right.
+const MIN_LANE_PX = 20;
+
+// How wide lane `i` looks on screen at mid-pool, in processing pixels.
+export function lanePixels(H, i, length, width, height) {
+  const [ax, ay] = applyH(H, i, length / 2);
+  const [bx, by] = applyH(H, i + 1, length / 2);
+  return Math.hypot((ax - bx) * width, (ay - by) * height);
+}
+
+// Where the camera stands. Corners are always tapped in the same order
+// (start wall first-lane side, start wall last-lane side, turn wall last-lane
+// side, turn wall first-lane side); only their starting positions and names
+// differ. From the side, the left wall is the start wall.
+export const VIEWS = {
+  side: {
+    label: 'Side of the pool (swimmers go left ↔ right)',
+    corners: [[0.04, 0.9], [0.14, 0.3], [0.86, 0.3], [0.96, 0.9]],
+    names: ['Left wall, first-lane side', 'Left wall, last-lane side', 'Right wall, last-lane side', 'Right wall, first-lane side'],
+  },
+  end: {
+    label: 'End of the pool (swimmers go up and down)',
+    corners: [[0.08, 0.92], [0.92, 0.92], [0.7, 0.18], [0.3, 0.18]],
+    names: ['Start wall, first-lane side', 'Start wall, last-lane side', 'Turn wall, last-lane side', 'Turn wall, first-lane side'],
+  },
+};
+
+// Common pools; anything else is entered by hand.
+export const POOLS = [
+  { key: '25yd', label: '25 yards (short course)', length: 25, unit: 'yd' },
+  { key: '25m', label: '25 metres (short course)', length: 25, unit: 'm' },
+  { key: '50m', label: '50 metres (long course)', length: 50, unit: 'm' },
+];
+
 export function defaultSetup() {
   return {
-    corners: [[0.08, 0.92], [0.92, 0.92], [0.7, 0.18], [0.3, 0.18]],
+    view: 'side',
+    corners: VIEWS.side.corners.map((c) => [...c]),
     length: 25,
-    unit: 'm',
+    unit: 'yd',
     lanes: 6,
     firstLane: 1,
     lane: {}, // lane index → { track: bool, name, stroke, swimmers }
@@ -34,7 +70,9 @@ export class PoolSession {
     this.bg = new Background(this.geom.nCells);
     this.lanes = Array.from({ length: setup.lanes }, (_, i) => {
       const s = laneSettings(setup, i);
-      return s.track ? new LaneTracker({ lane: i, length: this.L, maxSwimmers: s.swimmers, stroke: s.stroke }) : null;
+      if (!s.track) return null;
+      const lateral = lanePixels(this.H, i, this.L, width, height) >= MIN_LANE_PX;
+      return new LaneTracker({ lane: i, length: this.L, maxSwimmers: s.swimmers, stroke: s.stroke, lateral });
     });
     this.t = null;
     this.startT = null;

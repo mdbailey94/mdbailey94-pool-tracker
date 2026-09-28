@@ -156,8 +156,9 @@ const SAMPLE_KEEP = 180; // seconds of splash samples kept per swimmer
 
 // One swimmer's session: lengths with split times and stroke numbers.
 export class Swimmer {
-  constructor({ lane, slot = 0, length, stroke = 'auto' }) {
+  constructor({ lane, slot = 0, length, stroke = 'auto', lateral = true }) {
     this.lane = lane;
+    this.lateral = lateral; // can the splash be seen changing sides?
     this.slot = slot;
     this.length = length;
     this.stroke = stroke;
@@ -209,7 +210,7 @@ export class Swimmer {
     const zone = Math.min(4, this.length * 0.2);
     // Stroke rate from mid-pool only: no walls, turns or glides.
     const mid = this.samples.filter((s) => s.t >= t0 && s.t <= t1 && s.x > zone && s.x < this.length - zone);
-    const rhythm = mid.length ? analyzeStrokes(mid, mid[0].t, mid[mid.length - 1].t, this.family) : null;
+    const rhythm = mid.length ? analyzeStrokes(mid, mid[0].t, mid[mid.length - 1].t, this.family, { lateral: this.lateral }) : null;
     const len = {
       n: this.lengths.length + 1,
       from: open.wall,
@@ -249,6 +250,6 @@ export class Swimmer {
       if (recent[i].t - recent[i - 1].t > 1) { recent = recent.slice(i); break; }
     }
     if (recent.length < 20) return null;
-    return analyzeStrokes(recent, recent[0].t, recent[recent.length - 1].t, this.family);
+    return analyzeStrokes(recent, recent[0].t, recent[recent.length - 1].t, this.family, { lateral: this.lateral });
   }
 }

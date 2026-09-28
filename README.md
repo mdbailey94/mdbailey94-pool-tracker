@@ -6,10 +6,11 @@ web app (PWA), and sessions stay on the device.
 
 ## Using it
 
-1. **Camera up high at one end of the pool** (stand, balcony, tall tripod), both walls and every lane in view, kept still.
-   A recorded video file works too.
-2. **Line up the pool**: drag four dots onto the corners of the water (start wall ×2, turn wall ×2), set the pool
-   length (m or yd), lanes in view and first lane number. Untick empty lanes, name swimmers, and optionally set the
+1. **Camera up high beside the pool** at the middle of the length, so swimmers cross the picture left ↔ right
+   (a wide-angle lens helps fit a 25-yard or 25-metre pool). A camera at one end looking down the lanes works too;
+   pick which under *Camera position*. Both walls and every lane in view, kept still. A recorded video file works too.
+2. **Line up the pool**: drag four dots onto the corners of the water (from the side: left wall ×2, right wall ×2),
+   pick the pool (25 yd or 25 m short course, 50 m long course, or any length), lanes in view and first lane number. Untick empty lanes, name swimmers, and optionally set the
    stroke or up to 4 swimmers per lane (circle swimming).
 3. **Start tracking** before swimmers push off: it learns the empty water for 4 s. *Start race clock* times the first
    length from the start signal; otherwise it's estimated from the push-off.
@@ -36,10 +37,12 @@ running total, strokes, stroke rate) with pace per 100.
   Stroke count = hand entries (free/back) or cycles (fly/breast) from breakout to touch.
 
 Tested end to end on a synthetic pool video (perspective, ripples, glare, lane ropes, glides, turns, splashes):
-splits within ~0.3 s, stroke rate within ~1 cycle/min, stroke count ±1–2, in 25 m and 50 m pools, 15–30 fps, and two
-swimmers sharing a lane. Real footage adds things the simulator can't (people on deck, heavy waves, camera shake),
+splits within ~0.3 s, stroke rate within ~1 cycle/min, stroke count ±1–2, with the camera beside a 25-yard pool or
+at the end of 25 m and 50 m pools, 15–30 fps, and two swimmers sharing a lane. Real footage adds things the simulator can't (people on deck, heavy waves, camera shake),
 so check a session against a stopwatch before relying on it. Limits: freestyle vs backstroke (and fly vs breast)
-can't be told apart automatically; set the stroke per lane for exact labels. Keep crowded lanes to 1–2 swimmers
+can't be told apart automatically; set the stroke per lane for exact labels. From the side, far lanes look thin, so
+the left/right arm splash can be hard to see there; lanes under 20 px tall on screen fall back to tempo (splashes
+faster than ~70 a minute are single arms) unless the side-to-side swing is clear. Keep crowded lanes to 1–2 swimmers
 for reliable identities.
 
 ## Running it

@@ -2,14 +2,15 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { PoolSim, planSwimmer } from './support/pool-sim.mjs';
-import { PoolSession, sessionCSV, sessionRecord } from '../src/session.js';
+import { PoolSession, VIEWS, sessionCSV, sessionRecord } from '../src/session.js';
 
-function simulate({ L = 25, lanes = 4, swimmers, laneSetup = {}, fps = 25, clockAt = null, width = 240 }) {
-  const sim = new PoolSim({ lanes, length: L, width, height: Math.round(width * 0.625) });
-  const plans = swimmers.map((s) => sim.add(planSwimmer({ length: L, ...s })));
+function simulate({ L = 25, lanes = 4, swimmers, laneSetup = {}, fps = 25, clockAt = null, width = 240, aspect = 0.625, corners, unit = 'm' }) {
+  const Lm = unit === 'yd' ? L * 0.9144 : L;
+  const sim = new PoolSim({ lanes, length: Lm, width, height: Math.round(width * aspect), corners });
+  const plans = swimmers.map((s) => sim.add(planSwimmer({ length: Lm, ...s })));
   const lane = {};
   for (let i = 0; i < lanes; i++) lane[i] = { track: plans.some((p) => p.lane === i), ...(laneSetup[i] || {}) };
-  const setup = { corners: sim.corners, length: L, unit: 'm', lanes, firstLane: 1, lane };
+  const setup = { corners: sim.corners, length: L, unit, lanes, firstLane: 1, lane };
   const session = new PoolSession(setup, sim.w, sim.h);
   const end = Math.max(...plans.map((p) => p.end)) + 6;
   for (let t = 0; t < end; t += 1 / fps) {
@@ -82,6 +83,48 @@ test('50 m pool at 15 fps', () => {
   assert.equal(sw.lengths.length, 3);
   sw.lengths.slice(1).forEach((len, i) => near(len.time, truth[i + 1], 0.5, `length ${i + 2}`));
   sw.lengths.forEach((len) => near(len.rate, 44, 1.5, 'rate'));
+});
+
+// A camera beside the pool, at the app's real processing size (480 px wide).
+function sideView(corners) {
+  return simulate({
+    L: 25,
+    unit: 'yd',
+    lanes: 6,
+    width: 480,
+    aspect: 9 / 16,
+    fps: 20,
+    corners,
+    swimmers: [
+      { lane: 0, lengths: 4, speed: 1.6, stroke: 'free', rate: 48, start: 6 },
+      { lane: 2, lengths: 4, speed: 1.2, stroke: 'breast', rate: 38, start: 7, dwell: 1.0 },
+      { lane: 5, lengths: 4, speed: 1.5, stroke: 'free', rate: 44, start: 6.5 }, // far lane
+    ],
+  });
+}
+
+function checkSideView({ session, plans }) {
+  for (const plan of plans) {
+    const [sw] = session.lanes[plan.lane].swimmers;
+    assert.equal(sw.lengths.length, 4, `lane ${plan.lane + 1} lengths`);
+    const truth = truthSplits(plan);
+    sw.lengths.slice(1).forEach((len, i) => near(len.time, truth[i + 1], 0.4, `lane ${plan.lane + 1} length ${i + 2}`));
+    sw.lengths.forEach((len) => {
+      near(len.rate, plan.rate, 1.5, `lane ${plan.lane + 1} stroke rate`);
+      assert.equal(len.family, plan.stroke === 'free' ? 'alternating' : 'simultaneous', `lane ${plan.lane + 1} stroke type`);
+    });
+  }
+}
+
+test('camera beside a 25-yard pool: swimmers crossing left to right', () => {
+  checkSideView(sideView(VIEWS.side.corners));
+});
+
+test('low camera beside the pool: far lane too thin to see arms alternate', () => {
+  const run = sideView([[0.02, 0.95], [0.2, 0.45], [0.8, 0.45], [0.98, 0.95]]);
+  assert.equal(run.session.lanes[5].lateral, false);
+  assert.equal(run.session.lanes[0].lateral, true);
+  checkSideView(run);
 });
 
 test('session record and CSV export', () => {
