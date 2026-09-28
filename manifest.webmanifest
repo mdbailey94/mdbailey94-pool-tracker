@@ -1,0 +1,13 @@
+{
+  "name": "Pool Tracker",
+  "short_name": "Pool Tracker",
+  "description": "Lap times, stroke rate and stroke count for every lane, from one camera watching the pool.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f4f4f2",
+  "theme_color": "#2a78d6",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}

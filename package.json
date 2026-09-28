@@ -1,0 +1,11 @@
+{
+  "name": "pool-tracker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Lap times, stroke rate and stroke count for every lane, from one camera watching the pool.",
+  "scripts": {
+    "test": "node --test tests/*.test.mjs",
+    "start": "python3 -m http.server 8080"
+  }
+}
