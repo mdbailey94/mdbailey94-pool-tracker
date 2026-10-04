@@ -137,9 +137,16 @@ export class PoolSim {
       // Kick: a restless patch of white behind the body.
       shapes.push({ x: s.x - s.dir * 1.8, y: cx, rx: 0.5, ry: 0.2, col: [225, 235, 240], a: 0.25 + 0.3 * this.rand() });
     }
+    this.paint(cx, s.x, shapes);
+  }
+
+  // Paint shapes ({ x: m along the pool, y: lane units, rx, ry: m, col, a })
+  // within 3 m of position x in the lane strip around cx.
+  paint(cx, sx, shapes) {
+    const laneW = 2.5;
     // Bounding box in pixels (via the corners of the swimmer's area).
     let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
-    for (const [px, py] of [[cx - 0.5, s.x - 3], [cx + 0.5, s.x - 3], [cx - 0.5, s.x + 3], [cx + 0.5, s.x + 3]]) {
+    for (const [px, py] of [[cx - 0.5, sx - 3], [cx + 0.5, sx - 3], [cx - 0.5, sx + 3], [cx + 0.5, sx + 3]]) {
       const [u, v] = applyH(this.H, px, Math.max(0, Math.min(this.L, py)));
       x0 = Math.min(x0, u * this.w); x1 = Math.max(x1, u * this.w);
       y0 = Math.min(y0, v * this.h); y1 = Math.max(y1, v * this.h);

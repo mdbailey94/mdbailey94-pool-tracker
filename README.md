@@ -1,10 +1,60 @@
 # Pool Tracker
 
-For the coach on deck: one phone or tablet watching the pool gives **split times, stroke rate and
-stroke count for every lane**, from the camera alone. No install and no accounts: it's an installable
+For the coach on deck: one phone or tablet watching the pool times swimmers from the camera alone —
+**single-lap finish times** that go straight into a Google Sheet, or **split times, stroke rate and stroke count
+for every length**. No install and no accounts: it's an installable
 web app (PWA), and sessions stay on the device.
 
-## Using it
+It has two modes, picked on the home screen:
+
+- **One lap to a finish** (single-lap timer): press Start on the signal, and each lane stops by itself when the
+  swimmer touches the wall or crosses a line. Times are saved on the device and added to a **Google Sheet**.
+- **Every length of a session**: splits, stroke rate and stroke count for every length (below).
+
+## Single-lap timer
+
+1. **Camera**: either behind the finish wall looking up the pool (swimmers coming towards you), or side on, level
+   with the finish (swimmers crossing the picture; the higher the better). Keep it still. A recorded video works too.
+2. **Mark the finish**: choose the view and the finish (*touch on the wall* or *crossing a line*), then drag four
+   dots: 1–2 on the finish, 3–4 on a parallel line a few metres back (the backstroke flags are handy, 5 m), and enter
+   that distance. Set the lanes in view, untick empty ones, and name swimmers. Distance, stroke and event name go
+   with the times.
+3. **Ready** a couple of seconds before the start (it learns the empty water), then **Start** (or the space bar)
+   on the signal. Finishes in the first few seconds are ignored (adjustable).
+4. Each lane shows its time as the swimmer finishes. When every lane is in, the heat is saved and sent to the sheet.
+   If the camera misses one, **Tap finish** records it by hand; **Clear** throws away a wrong one (the sheet is
+   corrected too). **Next heat** goes again with the same setup.
+
+### Google Sheet
+
+Set up once on the home screen (*Google Sheet → Set it up*): make a sheet, paste the script the app shows into
+*Extensions → Apps Script*, deploy it as a web app (execute as *Me*, access *Anyone*), and paste the web-app URL into
+the app. Each finished swimmer becomes a row: date, time of day, event, heat, lane, swimmer, distance, stroke, time,
+seconds, timing (camera / manual) and an ID. No Google sign-in or API keys are involved; anyone with the URL could
+add rows, so keep it private. Times taken without signal wait on the device and go when it's back; rows are matched
+on their ID, so resending never duplicates, and corrections replace the row. *Send all to the sheet* uploads every
+past heat (e.g. after connecting a sheet later).
+
+### How the finish is detected (`finish.js`)
+
+The band between the dots is sampled into a top-down grid (0.1 m along, 12 strips per lane) with the same
+homography and water-background model as the lap tracker. In each lane the nearest swimmer-sized patch of
+"not water" gives the swimmer's **leading edge**, in metres from the line.
+
+- **Touch**: the hand stops dead on the wall, so the touch is called when the edge has come in close and stopped,
+  and timed where the approach meets that resting place. The visible edge is always a little behind the fingertips
+  (a thin hand barely shows), but it's behind by the same amount moving or stopped, so that cancels out.
+- **Line**: the time the edge reaches the line, from a straight-line fit of the approach.
+- A finish only counts after the swimmer is seen closing in by at least a metre, so a swimmer resting at the wall,
+  a kickboard or splash from the next lane doesn't trigger it.
+
+On synthetic video (perspective, ripples, glare, lane ropes, stroke splash; also through the real browser on
+VP9-encoded files): **touches within ~0.05 s** in both views at 25–30 fps. Line finishes trigger on the first
+clearly visible part of the swimmer: within ~0.1 s in near lanes, up to ~0.25 s late in a far lane seen side on at
+low resolution (there the head leads, as arms are under a pixel wide). Live camera times use the frame's capture
+time where the browser provides it; check a few heats against a stopwatch before relying on it.
+
+## Every length of a session
 
 1. **Camera up high at one end of the pool** (stand, balcony, tall tripod), both walls and every lane in view, kept still.
    A recorded video file works too.
@@ -65,8 +115,11 @@ src/tracker.js     swimmers per lane, frame to frame (pure, tested)
 src/laps.js        turns, finishes, lengths (pure, tested)
 src/strokes.js     stroke rate, family and count from splash (pure, tested)
 src/session.js     whole pipeline, results, CSV (pure, tested)
+src/finish.js      single-lap finish detection, heat records, CSV (pure, tested)
+src/sheets.js      Google Sheet sync queue and the Apps Script (tested against a fake Sheets service)
 src/capture.js     camera / video file frames
 src/store.js       saved setup and sessions (localStorage)
-src/app.js         UI
-tests/             node:test suites; support/pool-sim.mjs renders synthetic pool video
+src/app.js         UI (home, session tracking)
+src/race-ui.js     single-lap timer UI
+tests/             node:test suites; support/pool-sim.mjs and race-sim.mjs render synthetic pool video
 ```

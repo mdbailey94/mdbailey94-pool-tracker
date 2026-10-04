@@ -1,4 +1,6 @@
 // Pool Tracker UI: pick a video source, line up the pool, track, review.
+// Two ways of timing: a single lap to a finish (race-ui.js) or every length
+// of a session (below).
 
 import { applyH, cornersValid, poolToImage } from './homography.js';
 import { cellIndex } from './grid.js';
@@ -8,7 +10,9 @@ import {
 } from './session.js';
 import { STROKES } from './strokes.js';
 import { VideoSource, cameraSupported, keepAwake } from './capture.js';
-import { deleteSession, download, loadSessions, loadSetup, saveSession, saveSetup } from './store.js';
+import { deleteSession, download, loadSessions, loadSetup, read, saveSession, saveSetup, write } from './store.js';
+import { createRaceUI } from './race-ui.js';
+import { SheetSync } from './sheets.js';
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({
@@ -33,8 +37,11 @@ const CORNER_NAMES = [
   'Turn wall, first-lane side',
 ];
 
+const MODE_KEY = 'pool-tracker-mode';
+
 const state = {
   mode: 'home',
+  timing: read(MODE_KEY, 'race'), // 'race' (one lap to a finish) or 'session' (every length)
   source: new VideoSource(video),
   setup: loadSetup(),
   session: null,
@@ -51,14 +58,23 @@ const state = {
 function showHome() {
   state.mode = 'home';
   state.source.close();
+  race.stop();
   workEl.hidden = true;
   homeEl.hidden = false;
-  const sessions = loadSessions();
+  const isRace = state.timing === 'race';
+  const sessions = isRace ? [] : loadSessions();
   homeEl.innerHTML = `
     <section class="card">
-      <h2>Lap and stroke timing from one camera</h2>
+      <div class="seg" role="radiogroup" aria-label="What to time">
+        <label><input type="radio" name="timing" value="race" ${isRace ? 'checked' : ''}><span>One lap to a finish</span></label>
+        <label><input type="radio" name="timing" value="session" ${isRace ? '' : 'checked'}><span>Every length of a session</span></label>
+      </div>
+      ${isRace ? `<h2>Single-lap timer</h2>
+      <p>Film swimmers coming towards the camera or crossing from the side. Press Start on the signal; each
+        lane stops on its own when the swimmer touches the wall or crosses your line, and the times go to
+        your Google Sheet.</p>` : `<h2>Lap and stroke timing from one camera</h2>
       <p>Point a phone or tablet at the pool. The app follows a swimmer in each lane and records
-        every length: split time, stroke rate and stroke count.</p>
+        every length: split time, stroke rate and stroke count.</p>`}
       <div class="actions">
         <button class="btn" id="use-camera" ${cameraSupported() ? '' : 'disabled'}>Use the camera</button>
         <label class="btn secondary file-btn">Open a video<input type="file" id="open-file" accept="video/*"></label>
@@ -66,7 +82,18 @@ function showHome() {
       ${cameraSupported() ? '' : '<p class="muted small">The camera needs a secure (https) page. You can still open a recorded video.</p>'}
       <p class="form-error" id="home-error" role="alert" hidden></p>
     </section>
-    <section class="card">
+    ${isRace ? `<section class="card">
+      <h3>Setting up the camera</h3>
+      <ol class="steps">
+        <li><b>Coming towards you:</b> stand behind the finish wall, camera looking up the pool, a little above the water if you can (a tripod or a step).
+          <b>Side on:</b> stand level with the finish, the higher the better, so near swimmers don't hide far ones.</li>
+        <li>Keep the finish wall (or line) and a few metres of water in front of it in view, for every lane you want to time.</li>
+        <li><b>Keep it still</b> — a tripod or phone clamp is best. Landscape works best side on.</li>
+        <li>Press <b>Ready</b> a couple of seconds before the start: it learns what the empty water looks like.</li>
+      </ol>
+      <p class="muted small">If the camera misses a finish (or calls one wrongly), tap the lane's finish by hand or clear it.</p>
+    </section>
+    ${race.homeHTML()}` : `<section class="card">
       <h3>Setting up the camera</h3>
       <ol class="steps">
         <li><b>Up high, looking down the pool</b> from one end (a stand, balcony or tall tripod). The higher, the better swimmers stay apart.</li>
@@ -76,7 +103,7 @@ function showHome() {
       </ol>
       <p class="muted small">One swimmer per lane is the most accurate. For circle swimming, set up to 4 swimmers in a lane.
         Stroke type is read as Free/Back (arms alternate) or Fly/Breast (arms together); pick the exact stroke per lane if you like.</p>
-    </section>
+    </section>`}
     ${sessions.length ? `<section class="card">
       <h3>Past sessions</h3>
       <ul class="plain history">${sessions.map((s) => `
@@ -90,10 +117,21 @@ function showHome() {
     </section>` : ''}
     <div id="past"></div>`;
 
+  const next = () => (state.timing === 'race' ? race.showSetup() : showSetup());
+  homeEl.querySelectorAll('input[name="timing"]').forEach((r) => r.addEventListener('change', () => {
+    state.timing = r.value;
+    write(MODE_KEY, r.value);
+    // Times waiting for the Google Sheet go as soon as there's signal.
+sync.flush();
+window.addEventListener('online', () => sync.flush());
+
+showHome();
+  }));
+  if (isRace) race.bindHome(showHome);
   $('#use-camera').onclick = async () => {
     try {
       await state.source.openCamera();
-      showSetup();
+      next();
     } catch (e) {
       showError(e.name === 'NotAllowedError' ? 'Camera permission was refused. Allow it in the browser settings and try again.' : e.message);
     }
@@ -103,7 +141,7 @@ function showHome() {
     if (!file) return;
     try {
       await state.source.openFile(file);
-      showSetup();
+      next();
     } catch (e) {
       showError(e.message);
     }
@@ -171,6 +209,7 @@ function currentH() {
 
 function draw(snap) {
   ctx.clearRect(0, 0, overlay.width, overlay.height);
+  if (state.mode.startsWith('race')) { race.draw(); return; }
   const { setup } = state;
   const dpr = window.devicePixelRatio || 1;
   const H = currentH();
@@ -205,16 +244,16 @@ function draw(snap) {
     if (state.showFg && state.session?.fg) drawForeground();
     if (snap) drawSwimmers(P, snap);
   }
-  if (editing) drawHandles();
+  if (editing) drawHandles(setup.corners);
 }
 
 function line([x0, y0], [x1, y1]) {
   ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x1, y1); ctx.stroke();
 }
 
-function drawHandles() {
+function drawHandles(corners) {
   const dpr = window.devicePixelRatio || 1;
-  state.setup.corners.forEach(([u, v], i) => {
+  corners.forEach(([u, v], i) => {
     const x = u * overlay.width, y = v * overlay.height;
     ctx.fillStyle = '#ffcf33';
     ctx.strokeStyle = '#111';
@@ -290,17 +329,25 @@ function drawSwimmers(P, snap) {
   }
 }
 
-// Corner dragging.
+// Corner dragging: the pool corners in session setup, the finish dots in
+// race setup.
+function handles() {
+  if (state.mode === 'setup') return { corners: state.setup.corners, done: () => { saveSetup(state.setup); checkCorners(); } };
+  if (state.mode === 'race-setup') return race.handles();
+  return null;
+}
+
 function pointerPos(ev) {
   const r = overlay.getBoundingClientRect();
   return [(ev.clientX - r.left) / r.width, (ev.clientY - r.top) / r.height];
 }
 overlay.addEventListener('pointerdown', (ev) => {
-  if (state.mode !== 'setup') return;
+  const h = handles();
+  if (!h) return;
   const [u, v] = pointerPos(ev);
   const r = overlay.getBoundingClientRect();
   let best = -1, bestD = 40; // px
-  state.setup.corners.forEach(([cu, cv], i) => {
+  h.corners.forEach(([cu, cv], i) => {
     const d = Math.hypot((cu - u) * r.width, (cv - v) * r.height);
     if (d < bestD) { best = i; bestD = d; }
   });
@@ -310,16 +357,16 @@ overlay.addEventListener('pointerdown', (ev) => {
   ev.preventDefault();
 });
 overlay.addEventListener('pointermove', (ev) => {
-  if (state.drag < 0) return;
+  const h = handles();
+  if (state.drag < 0 || !h) return;
   const [u, v] = pointerPos(ev);
-  state.setup.corners[state.drag] = [Math.min(1, Math.max(0, u)), Math.min(1, Math.max(0, v))];
+  h.corners[state.drag] = [Math.min(1, Math.max(0, u)), Math.min(1, Math.max(0, v))];
   draw();
 });
 const endDrag = () => {
   if (state.drag < 0) return;
   state.drag = -1;
-  saveSetup(state.setup);
-  checkCorners();
+  handles()?.done();
 };
 overlay.addEventListener('pointerup', endDrag);
 overlay.addEventListener('pointercancel', endDrag);
@@ -583,6 +630,14 @@ function finishTracking() {
   $('#adjust').onclick = showSetup;
   $('#home-btn').onclick = showHome;
 }
+
+// ------------------------------------------------------------- single lap
+
+const sync = new SheetSync();
+const race = createRaceUI({
+  state, $, esc, panel, overlay, ctx, video, sync,
+  openWorkspace, showHome, draw, drawHandles, line,
+});
 
 // -------------------------------------------------------------------- boot
 

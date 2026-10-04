@@ -1,11 +1,11 @@
 // Offline support (pool decks often have poor Wi-Fi). Every request goes to
 // the network first so files from different releases are never mixed; the
 // cached copy is used only when offline.
-const CACHE = 'pool-tracker-v1';
+const CACHE = 'pool-tracker-v2';
 const ASSETS = [
   './', 'index.html', 'pool.css', 'manifest.webmanifest', 'icon.svg',
-  'src/app.js', 'src/capture.js', 'src/grid.js', 'src/homography.js', 'src/laps.js',
-  'src/session.js', 'src/store.js', 'src/strokes.js', 'src/tracker.js',
+  'src/app.js', 'src/capture.js', 'src/finish.js', 'src/grid.js', 'src/homography.js', 'src/laps.js',
+  'src/race-ui.js', 'src/session.js', 'src/sheets.js', 'src/store.js', 'src/strokes.js', 'src/tracker.js',
 ];
 
 self.addEventListener('install', (e) => {

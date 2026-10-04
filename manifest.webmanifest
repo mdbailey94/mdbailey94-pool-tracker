@@ -1,7 +1,7 @@
 {
   "name": "Pool Tracker",
   "short_name": "Pool Tracker",
-  "description": "Lap times, stroke rate and stroke count for every lane, from one camera watching the pool.",
+  "description": "Single-lap finish times (to a Google Sheet) and per-length splits and strokes, from one camera watching the pool.",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",

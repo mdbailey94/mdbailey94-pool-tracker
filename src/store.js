@@ -2,12 +2,13 @@
 // device only.
 
 import { defaultSetup } from './session.js';
+import { defaultRaceSetup } from './finish.js';
 
 const SETUP_KEY = 'pool-tracker-setup';
 const SESSIONS_KEY = 'pool-tracker-sessions';
 const MAX_SESSIONS = 100;
 
-function read(key, fallback) {
+export function read(key, fallback) {
   try {
     const v = JSON.parse(localStorage.getItem(key));
     return v ?? fallback;
@@ -16,7 +17,7 @@ function read(key, fallback) {
   }
 }
 
-function write(key, value) {
+export function write(key, value) {
   try {
     localStorage.setItem(key, JSON.stringify(value));
     return true;
@@ -52,4 +53,29 @@ export function download(name, text, type = 'text/csv') {
   a.click();
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+// Single-lap heats (finish-line timing).
+const RACE_SETUP_KEY = 'pool-tracker-race-setup';
+const RACES_KEY = 'pool-tracker-races';
+const MAX_RACES = 300;
+
+export function loadRaceSetup() {
+  const saved = read(RACE_SETUP_KEY, null);
+  return saved ? { ...defaultRaceSetup(), ...saved, lane: { ...(saved.lane || {}) } } : defaultRaceSetup();
+}
+
+export const saveRaceSetup = (setup) => write(RACE_SETUP_KEY, setup);
+
+export const loadRaces = () => read(RACES_KEY, []);
+
+export function saveRace(record) {
+  if (!record.results.some((r) => Number.isFinite(r.time))) return false;
+  const all = loadRaces().filter((r) => r.id !== record.id);
+  all.unshift(record);
+  return write(RACES_KEY, all.slice(0, MAX_RACES));
+}
+
+export function deleteRace(id) {
+  write(RACES_KEY, loadRaces().filter((r) => r.id !== id));
 }

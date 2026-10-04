@@ -169,3 +169,38 @@ td .est { color: var(--muted); }
 .history li > div { flex: 1; min-width: 0; }
 .plain { list-style: none; padding: 0; margin: 0; }
 details summary { cursor: pointer; color: var(--accent); min-height: 32px; }
+
+/* ---------- single-lap timer */
+.seg { display: flex; gap: 4px; padding: 4px; margin: 0 0 12px; border-radius: 999px; background: var(--bg); border: 1px solid var(--border); }
+.seg label { flex: 1; position: relative; }
+.seg input { position: absolute; opacity: 0; inset: 0; margin: 0; cursor: pointer; }
+.seg span {
+  display: flex; align-items: center; justify-content: center; text-align: center;
+  min-height: 38px; padding: 4px 10px; border-radius: 999px; font-size: 14px; font-weight: 600; color: var(--text-2);
+}
+.seg input:checked + span { background: var(--accent); color: var(--accent-ink); }
+.seg input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.lane-row.race-lane { grid-template-columns: auto 1fr; }
+.clock.big { font-size: 40px; }
+.start-btn { min-height: 64px; font-size: 22px; }
+.race-lanes li {
+  display: grid; grid-template-columns: 2em 1fr auto auto; gap: 8px; align-items: center;
+  padding: 8px 0; border-bottom: 1px solid var(--border);
+}
+.race-lanes li > [hidden] { display: none !important; }
+.lane-no { font-weight: 700; color: var(--muted); }
+.lane-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lane-time { font-variant-numeric: tabular-nums; font-size: 18px; color: var(--muted); text-align: right; }
+.lane-time.in { color: var(--text); font-size: 24px; font-weight: 700; }
+.tag {
+  display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 6px; vertical-align: middle;
+  font-size: 11px; font-weight: 600; color: var(--text-2); background: var(--bg); border: 1px solid var(--border);
+}
+textarea.code {
+  display: block; width: 100%; margin: 6px 0; padding: 8px; resize: vertical;
+  font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+  border: 1px solid var(--border); border-radius: 8px; background: var(--bg); color: var(--text);
+}
+code { font: 0.9em ui-monospace, SFMono-Regular, Menlo, monospace; }
+th.left, td.left { text-align: left; }

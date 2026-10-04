@@ -19,6 +19,7 @@ export class VideoSource {
     this.onFrame = null;
     this.handle = null;
     this.lastTime = -1;
+    this.gen = 0; // bumped on start/stop so a callback from an earlier run can't carry on
   }
 
   async openCamera() {
@@ -67,6 +68,7 @@ export class VideoSource {
   start(onFrame) {
     this.onFrame = onFrame;
     this.running = true;
+    this.gen++;
     this.lastTime = -1;
     if (!this.live) this.video.play().catch(() => {});
     this.schedule();
@@ -75,17 +77,18 @@ export class VideoSource {
   schedule() {
     if (!this.running) return;
     const v = this.video;
+    const gen = this.gen;
     if (v.requestVideoFrameCallback) {
       // Camera frames carry the moment they were captured, which beats the
       // moment they reached the screen for timing.
-      this.handle = v.requestVideoFrameCallback((now, meta) => this.grab(this.live ? (meta.captureTime ?? now) / 1000 : meta.mediaTime));
+      this.handle = v.requestVideoFrameCallback((now, meta) => this.grab(this.live ? (meta.captureTime ?? now) / 1000 : meta.mediaTime, gen));
     } else {
-      this.handle = requestAnimationFrame((now) => this.grab(this.live ? now / 1000 : v.currentTime));
+      this.handle = requestAnimationFrame((now) => this.grab(this.live ? now / 1000 : v.currentTime, gen));
     }
   }
 
-  grab(t) {
-    if (!this.running) return;
+  grab(t, gen) {
+    if (!this.running || gen !== this.gen) return;
     const v = this.video;
     if (t !== this.lastTime && v.readyState >= 2) {
       this.lastTime = t;
@@ -98,6 +101,7 @@ export class VideoSource {
 
   stop() {
     this.running = false;
+    this.gen++;
     if (!this.live) this.video.pause();
   }
 
