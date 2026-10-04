@@ -8,17 +8,20 @@ web app (PWA), and sessions stay on the device.
 It has two modes, picked on the home screen:
 
 - **One lap to a finish** (single-lap timer): press Start on the signal, and each lane stops by itself when the
-  swimmer touches the wall or crosses a line. Times are saved on the device and added to a **Google Sheet**.
+  swimmer's hand touches the wall or their head crosses a line. Times are saved on the device and added to a
+  **Google Sheet**.
 - **Every length of a session**: splits, stroke rate and stroke count for every length (below).
 
 ## Single-lap timer
 
 1. **Camera**: either behind the finish wall looking up the pool (swimmers coming towards you), or side on, level
    with the finish (swimmers crossing the picture; the higher the better). Keep it still. A recorded video works too.
-2. **Mark the finish**: choose the view and the finish (*touch on the wall* or *crossing a line*), then drag four
-   dots: 1–2 on the finish, 3–4 on a parallel line a few metres back (the backstroke flags are handy, 5 m), and enter
-   that distance. Set the lanes in view, untick empty ones, and name swimmers. Distance, stroke and event name go
-   with the times.
+2. **Mark the finish**: pick where the camera is (behind the finish in the middle or at a corner, or side on in
+   either direction) and the pool (25 m, 25 yd, 50 m: the backstroke flags make the back line). Choose the finish
+   (*touch on the wall* or *head crossing a line*), set the lanes in view, then put the four dots roughly in place:
+   1–2 on the finish, 3–4 on the line behind it. **Find lanes** lines the lanes up with the ropes in the picture;
+   **Swap lane order** puts lane 1 at the other end; **Undo** reverses either. Untick empty lanes and name swimmers.
+   Distance, stroke and event name go with the times.
 3. **Ready** a couple of seconds before the start (it learns the empty water), then **Start** (or the space bar)
    on the signal. Finishes in the first few seconds are ignored (adjustable).
 4. Each lane shows its time as the swimmer finishes. When every lane is in, the heat is saved and sent to the sheet.
@@ -39,20 +42,34 @@ past heat (e.g. after connecting a sheet later).
 
 The band between the dots is sampled into a top-down grid (0.1 m along, 12 strips per lane) with the same
 homography and water-background model as the lap tracker. In each lane the nearest swimmer-sized patch of
-"not water" gives the swimmer's **leading edge**, in metres from the line.
+"not water" gives the swimmer's **front edge**, in metres from the line. That edge jumps about: a hand reaches out
+ahead of the head for part of every stroke, then pulls back under the body.
 
-- **Touch**: the hand stops dead on the wall, so the touch is called when the edge has come in close and stopped,
-  and timed where the approach meets that resting place. The visible edge is always a little behind the fingertips
-  (a thin hand barely shows), but it's behind by the same amount moving or stopped, so that cancels out.
-- **Line**: the time the edge reaches the line, from a straight-line fit of the approach.
+- **Head** (what the swimmer is followed by, and what a line finish is timed on): it moves steadily, so it's a
+  straight line fitted along the *back* of where the edge reaches over the last ~3 s (where it is whenever no arm is
+  out in front). Shown as a green ring on the swimmer.
+- **Touch** (timed by the hand): the hand stops dead on the wall, so the touch is called when the furthest point of
+  the edge has stopped close to the wall, and timed where the final reach meets that resting place. The visible
+  edge is a little behind the fingertips (a thin hand barely shows), but by about the same amount moving or
+  stopped, so that mostly cancels out.
 - A finish only counts after the swimmer is seen closing in by at least a metre, so a swimmer resting at the wall,
   a kickboard or splash from the next lane doesn't trigger it.
 
-On synthetic video (perspective, ripples, glare, lane ropes, stroke splash; also through the real browser on
-VP9-encoded files): **touches within ~0.05 s** in both views at 25–30 fps. Line finishes trigger on the first
-clearly visible part of the swimmer: within ~0.1 s in near lanes, up to ~0.25 s late in a far lane seen side on at
-low resolution (there the head leads, as arms are under a pixel wide). Live camera times use the frame's capture
-time where the browser provides it; check a few heats against a stopwatch before relying on it.
+On synthetic video (perspective, ripples, glare, lane ropes, stroke splash, arms reaching in and out of view;
+also through the real browser on VP9-encoded files), over 10 random seeds: **head crossings within ~0.05 s** at the
+app's resolution, near and far lanes, both views; **touches: median error 0.01 s, 80% within ±0.07 s, worst
+~0.15 s**. Live camera times use the frame's capture time where the browser provides it; check a few heats against
+a stopwatch before relying on it.
+
+### Finding the lanes (`lanes.js`)
+
+Starting from the rough dots, each lane line is looked for as a straight line in the picture near where the dots
+put it: a rope is a line of floats brighter or redder than the water on *both* sides of it (so a pool edge with
+bright deck on one side doesn't count, and nor do the dark lines on the pool floor). The ropes found then set the
+band with a least-squares homography; with only one or two ropes in view the lanes just slide (and stretch) along
+the finish and back lines. The finish line and back line stay exactly where you put them. On synthetic pools, dots
+up to a third of a lane off end up within ~2 px of the true lane lines (3+ ropes) or ~3 px (2 ropes); one rope
+fixes the position but not the lane width. The same button is in the every-length setup.
 
 ## Every length of a session
 
@@ -115,7 +132,8 @@ src/tracker.js     swimmers per lane, frame to frame (pure, tested)
 src/laps.js        turns, finishes, lengths (pure, tested)
 src/strokes.js     stroke rate, family and count from splash (pure, tested)
 src/session.js     whole pipeline, results, CSV (pure, tested)
-src/finish.js      single-lap finish detection, heat records, CSV (pure, tested)
+src/finish.js      single-lap finish detection (head and hand), presets, heat records, CSV (pure, tested)
+src/lanes.js       finding lane ropes to line up the dots (pure, tested)
 src/sheets.js      Google Sheet sync queue and the Apps Script (tested against a fake Sheets service)
 src/capture.js     camera / video file frames
 src/store.js       saved setup and sessions (localStorage)

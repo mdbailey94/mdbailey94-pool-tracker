@@ -1,6 +1,6 @@
 // Single-lap timing at a finish: the clock starts when the coach presses
-// Start, and each lane stops when its swimmer's hand reaches the wall
-// (touch) or their leading edge crosses a line across the pool (line).
+// Start, and each lane stops when its swimmer's hand touches the wall
+// (touch) or their head crosses a line across the pool (line).
 //
 // The coach marks a band of water in front of the finish with four dots: two
 // on the finish line and two on a parallel line a few metres back (the
@@ -8,16 +8,16 @@
 // swimmers coming towards it, or from the side at swimmers crossing the
 // picture: the band is sampled into a top-down grid either way (as in the
 // lap tracker), so everything here works in metres from the finish line.
-// Per lane, the edge of the swimmer nearest the finish is followed as it
-// closes in, and the finish time is where it meets the line, interpolated
-// between frames. Pure (no DOM), so it can be tested on synthetic video.
+// Per lane, the front of the swimmer is followed as they close in, and the
+// finish time is interpolated between frames. Pure (no DOM), so it can be
+// tested on synthetic video.
 
 import { cornersValid, homography } from './homography.js';
 import { Background, cellIndex, makeGeometry, Rectifier } from './grid.js';
 import { YARD } from './session.js';
 
 export const CELL = 0.1; // m along the band; sets how finely the edge is located
-const OVERSHOOT = 1; // m of water past a line finish, to see the swimmer cross it
+const OVERSHOOT = 1.5; // m of water past a line finish, to see the swimmer cross it (hands lead the head)
 const ACROSS = 12; // strips across each lane: narrow enough that an arm fills a good part of one
 
 export const RACE_STROKES = ['Freestyle', 'Backstroke', 'Breaststroke', 'Butterfly', 'IM', 'Kick', 'Other'];
@@ -32,9 +32,38 @@ export const VIEW_CORNERS = {
   side: [[0.82, 0.92], [0.74, 0.3], [0.46, 0.3], [0.42, 0.92]],
 };
 
+const mirror = (corners) => corners.map(([x, y]) => [1 - x, y]);
+
+// Where the camera is: each sets the view and a starting shape for the dots
+// to drag from (lane 1 on the left of the picture; Swap lane order flips it).
+export const CAMERA_PRESETS = {
+  'head-centre': { label: 'Behind the finish, middle', view: 'head', corners: VIEW_CORNERS.head },
+  // From a corner, that end of the wall is nearest, so lowest in the picture.
+  'head-left': { label: 'Behind the finish, left corner', view: 'head', corners: [[0.03, 0.93], [0.97, 0.6], [0.72, 0.3], [0.2, 0.42]] },
+  'head-right': { label: 'Behind the finish, right corner', view: 'head', corners: [[0.03, 0.6], [0.97, 0.93], [0.8, 0.42], [0.28, 0.3]] },
+  'side-ltr': { label: 'Side on, swimming left → right', view: 'side', corners: VIEW_CORNERS.side },
+  'side-rtl': { label: 'Side on, swimming right → left', view: 'side', corners: mirror(VIEW_CORNERS.side) },
+};
+
+// Common pools: the backstroke flags (5 m / 5 yd out) make a handy back line.
+export const POOL_PRESETS = {
+  '25m': { label: '25 m pool, flags at 5 m', unit: 'm', depth: 5, distance: 25 },
+  '25yd': { label: '25 yd pool, flags at 5 yd', unit: 'yd', depth: 5, distance: 25 },
+  '50m': { label: '50 m pool, flags at 5 m', unit: 'm', depth: 5, distance: 50 },
+};
+
+export const poolPresetOf = (setup) => Object.keys(POOL_PRESETS).find((k) => {
+  const p = POOL_PRESETS[k];
+  return p.unit === setup.unit && p.depth === setup.depth && p.distance === setup.distance;
+}) || 'custom';
+
+// Lane 1 at the other end of the finish: dots 1↔2 and 3↔4.
+export const swapLaneOrder = ([a, b, c, d]) => [b, a, d, c];
+
 export function defaultRaceSetup() {
   return {
     view: 'head',
+    camera: 'head-centre', // CAMERA_PRESETS key
     finish: 'touch', // 'touch' (hand on the wall) or 'line' (crossing a line)
     corners: VIEW_CORNERS.head.map((p) => [...p]),
     depth: 5, // distance from the finish line back to dots 3–4
@@ -90,22 +119,31 @@ export function leadingEdge(fg, geom, lane, over = 0, { rowOn = 0.6, minMass = 5
 // line (not just something sitting at the wall, like the last heat's
 // swimmer).
 //
-// Touch: the hand stops dead on the wall, so the touch is called once the
-// edge has come in close and stopped, and timed where the approach meets
-// that resting place. The edge seen is always a little behind the
+// The front edge of a swimmer jumps about: a hand reaches out ahead of the
+// head for part of every stroke, then pulls back under the body. The head
+// moves steadily, so it's what the swimmer is followed by: over the last
+// couple of seconds, a straight line along the back of where the edge
+// reaches (where it is whenever no arm is out in front).
+//
+// Line: the time the head reaches the line.
+//
+// Touch: timed by the hand, which stops dead on the wall. The touch is
+// called once the edge has come in close and stopped, and timed where the
+// hand's approach (the line along the front of where the edge reaches)
+// meets that resting place. The edge seen is always a little behind the
 // fingertips (a thin hand barely shows, and far corners of the picture are
 // coarse), but it's behind by the same amount moving or stopped, so that
 // cancels out.
-//
-// Line: the time the edge reaches the line, from the approach just before.
 export class LaneFinish {
-  constructor({ mode = 'touch', depth = 5, cellLen = CELL } = {}) {
+  constructor({ mode = 'touch', depth = 5, cellLen = CELL, over = 0 } = {}) {
     this.mode = mode;
     this.cell = cellLen;
+    this.floor = -over + 1.5 * cellLen; // edges this far past the line are cut off by the grid
     this.zone = Math.min(1, 0.3 * depth); // a stop this close to the wall is the touch
     this.travel = Math.min(1, 0.4 * depth); // must have come at least this far
     this.hist = [];
     this.lead = null;
+    this.head = null; // m from the line to the front of the head, when known
     this.result = null; // { t, method: 'auto' | 'manual' }
   }
 
@@ -116,44 +154,60 @@ export class LaneFinish {
     this.lead = det ? det.lead : null;
     if (det) this.hist.push({ t, lead: det.lead });
     while (this.hist.length && this.hist[0].t < t - 3) this.hist.shift();
+    const head = this.headLine(t);
+    this.head = head && det ? head.a + head.b * t : null;
     if (!det || !armed) return null;
     const farthest = Math.max(...this.hist.map((h) => h.lead));
     if (farthest - det.lead < this.travel) return null;
-    const at = this.mode === 'touch' ? this.touch(t, det.lead) : this.cross(t, det.lead);
+    const at = this.mode === 'touch' ? this.touch(t, det.lead) : this.cross(t, det.lead, head);
     if (at === null) return null;
     this.result = { t: at, method: 'auto' };
     return this.result;
   }
 
-  touch(t, lead) {
-    if (lead > this.zone) return null;
-    // Stopped: held within a cell for a moment (longer than the pause
-    // between two arm strokes).
-    const recent = this.hist.filter((h) => h.t >= t - 0.3);
-    const leads = recent.map((h) => h.lead);
-    if (t - recent[0].t < 0.27 || Math.max(...leads) - Math.min(...leads) > 1.01 * this.cell) return null;
-    // At rest the edge can flicker between two neighbouring cells: the
-    // resting place is their average, reached somewhere between first
-    // entering the farther one and first entering the nearer one.
-    const lo = Math.min(...leads), hi = Math.max(...leads);
-    const level = leads.reduce((a, b) => a + b, 0) / leads.length;
-    let k = this.hist.length - 1;
-    while (k > 0 && this.hist[k - 1].lead <= hi + 0.01) k--;
-    const arrived = this.hist.slice(k).find((h) => h.lead <= lo + 0.01).t;
-    const approach = this.hist.slice(0, k).filter((h) => h.t >= this.hist[k].t - 0.6);
-    const est = meets(approach, level);
-    if (est === null) return arrived;
-    return Math.min(arrived, Math.max(approach[approach.length - 1].t, est));
+  // The head's path over the last 2 s, as lead = a + b·t; null until the
+  // swimmer has been seen long enough (a stroke or so) to tell.
+  headLine(t) {
+    const pts = this.hist.filter((h) => h.t >= t - 2.8 && h.lead > this.floor);
+    if (pts.length < 8 || t - pts[0].t < 0.8) return null;
+    return envelope(pts, 0.75);
   }
 
-  cross(t, lead) {
+  touch(t, lead) {
+    // Stopped: the furthest the edge reaches has stayed put for a moment
+    // (longer than the pause between two arm strokes). A still, thin arm
+    // flickers in and out of view, so it's the furthest point that counts,
+    // not every frame.
+    const recent = this.hist.filter((h) => h.t >= t - 0.3);
+    const before = this.hist.filter((h) => h.t >= t - 0.6 && h.t < t - 0.3);
+    if (t - recent[0].t < 0.25 || before.length < 3) return null;
+    const level = Math.min(...recent.map((h) => h.lead));
+    if (level > this.zone || Math.abs(Math.min(...before.map((h) => h.lead)) - level) > 1.01 * this.cell) return null;
+    // When the edge first reached the cell it rests in. The hand was still
+    // up to a cell short then, so the touch is where the final reach (the
+    // last moments of approach, when the hand leads steadily) meets the
+    // resting place.
+    const k = this.hist.findIndex((h) => h.t >= t - 1.5 && h.lead <= level + 0.6 * this.cell);
+    const arrived = this.hist[k].t;
+    const approach = this.hist.slice(0, k + 1).filter((h) => h.t >= arrived - 0.4);
+    const hand = approach.length >= 5 ? envelope(approach, 0.5) : null;
+    if (!hand) return arrived;
+    const est = (level - hand.a) / hand.b;
+    // Up to a cell further at a racing pace (~1.5 m/s and up).
+    return Math.min(arrived + Math.min(0.07, this.cell / -hand.b), Math.max(arrived - 0.3, est));
+  }
+
+  cross(t, lead, head) {
+    if (head) {
+      const at = -head.a / head.b; // when the head reaches the line
+      return at <= t ? Math.max(t - 0.5, at) : null;
+    }
+    // Not seen long enough to find the head (it came into view right at the
+    // line): go by the front edge.
     if (lead > 0) return null;
     const before = this.hist.filter((h) => h.t < t && h.lead > 0);
     const prev = before[before.length - 1];
     if (!prev) return t;
-    const est = meets([...before.filter((h) => h.t >= t - 0.5), { t, lead }], 0);
-    if (est !== null) return Math.min(t, Math.max(prev.t, est));
-    // Too few points for a fit: between the last two measurements.
     return prev.t + (prev.lead / (prev.lead - lead)) * (t - prev.t);
   }
 
@@ -165,21 +219,26 @@ export class LaneFinish {
   clear() {
     this.result = null;
     this.hist = [];
+    this.head = null;
   }
 }
 
-// When a straight-line fit of the approach (which evens out the stop-start
-// of arm strokes) reaches `level` metres from the line; null if it isn't
-// clearly closing in.
-function meets(pts, level) {
-  if (pts.length < 3) return null;
+// A straight line lead = a + b·t through moving points, set at quantile q of
+// how far they scatter either side: q = 0.1 runs along the front of them
+// (the outstretched hand), 0.75 along the back (the head: the middle of the
+// times no arm is out in front). Null unless clearly closing in on the line.
+export function envelope(pts, q) {
   const n = pts.length;
+  if (n < 3) return null;
   const mt = pts.reduce((s, p) => s + p.t, 0) / n;
   const ml = pts.reduce((s, p) => s + p.lead, 0) / n;
   let sxy = 0, sxx = 0;
   for (const p of pts) { sxy += (p.t - mt) * (p.lead - ml); sxx += (p.t - mt) ** 2; }
-  const slope = sxx > 0 ? sxy / sxx : 0;
-  return slope < -0.2 ? mt + (level - ml) / slope : null;
+  const b = sxx > 0 ? sxy / sxx : 0;
+  if (!(b < -0.2)) return null;
+  const res = pts.map((p) => p.lead - (ml + b * (p.t - mt))).sort((x, y) => x - y);
+  const off = res[Math.min(n - 1, Math.max(0, Math.round(q * (n - 1))))];
+  return { a: ml - b * mt + off, b };
 }
 
 export class FinishSession {
@@ -194,7 +253,7 @@ export class FinishSession {
     this.rect = new Rectifier(this.H, this.geom, width, height);
     this.bg = new Background(this.geom.nCells, { warmup: 2, warmFrames: 16 });
     this.lanes = Array.from({ length: setup.lanes }, (_, i) => (raceLane(setup, i).track
-      ? new LaneFinish({ mode: setup.finish, depth: this.depth, cellLen: this.geom.cellLen })
+      ? new LaneFinish({ mode: setup.finish, depth: this.depth, cellLen: this.geom.cellLen, over: this.over })
       : null));
     this.t = null;
     this.prevT = null;
@@ -263,7 +322,7 @@ export class FinishSession {
       clock: !this.started || t === null ? null
         : this.allDone ? Math.max(...this.lanes.map((lf, i) => (lf ? this.result(i).time : 0)))
           : Math.max(0, t - this.startT),
-      lanes: this.lanes.map((lf, i) => (lf ? { lane: i, label: raceLaneLabel(this.setup, i), lead: lf.lead, result: this.result(i) } : null)),
+      lanes: this.lanes.map((lf, i) => (lf ? { lane: i, label: raceLaneLabel(this.setup, i), lead: lf.lead, head: lf.head, result: this.result(i) } : null)),
     };
   }
 }

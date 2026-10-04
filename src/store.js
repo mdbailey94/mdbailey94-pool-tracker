@@ -62,7 +62,9 @@ const MAX_RACES = 300;
 
 export function loadRaceSetup() {
   const saved = read(RACE_SETUP_KEY, null);
-  return saved ? { ...defaultRaceSetup(), ...saved, lane: { ...(saved.lane || {}) } } : defaultRaceSetup();
+  if (!saved) return defaultRaceSetup();
+  const camera = saved.camera || (saved.view === 'side' ? 'side-ltr' : 'head-centre'); // saved before presets
+  return { ...defaultRaceSetup(), ...saved, camera, lane: { ...(saved.lane || {}) } };
 }
 
 export const saveRaceSetup = (setup) => write(RACE_SETUP_KEY, setup);

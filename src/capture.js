@@ -60,6 +60,13 @@ export class VideoSource {
     return { width: this.canvas.width, height: this.canvas.height, aspect: w / h };
   }
 
+  // The picture showing right now (for finding the lane ropes).
+  frame() {
+    const { width, height } = this.canvas;
+    this.ctx.drawImage(this.video, 0, 0, width, height);
+    return { rgba: this.ctx.getImageData(0, 0, width, height).data, width, height };
+  }
+
   get size() {
     return { width: this.canvas.width, height: this.canvas.height };
   }

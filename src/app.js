@@ -13,6 +13,7 @@ import { VideoSource, cameraSupported, keepAwake } from './capture.js';
 import { deleteSession, download, loadSessions, loadSetup, read, saveSession, saveSetup, write } from './store.js';
 import { createRaceUI } from './race-ui.js';
 import { SheetSync } from './sheets.js';
+import { findLaneLines } from './lanes.js';
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({
@@ -386,7 +387,13 @@ function showSetup() {
       <p>Drag the dots onto the corners of the water you want to watch, where the outer lane ropes
         (or pool edges) meet the walls:</p>
       <ol class="corner-key">${CORNER_NAMES.map((n, i) => `<li><span class="corner-dot">${i + 1}</span>${n}</li>`).join('')}</ol>
-      <p class="muted small">Check that the drawn lane lines sit on the lane ropes all the way down.</p>
+      <p class="muted small">Check that the drawn lane lines sit on the lane ropes all the way down, or put the
+        dots roughly in place and let <b>Find lanes</b> line them up with the ropes.</p>
+      <div class="actions">
+        <button class="btn secondary" id="find-lanes">Find lanes</button>
+        <button class="btn secondary" id="undo-dots" hidden>Undo</button>
+      </div>
+      <p class="small" id="find-msg" role="status"></p>
       <div class="row">
         <label class="field">Pool length <input id="len" type="number" min="10" max="100" step="any" value="${setup.length}"></label>
         <label class="field">Unit <select id="unit"><option value="m">metres</option><option value="yd" ${setup.unit === 'yd' ? 'selected' : ''}>yards</option></select></label>
@@ -423,6 +430,32 @@ function showSetup() {
   ['#len', '#unit', '#lanes', '#first'].forEach((id) => $(id).addEventListener('change', onChange));
   $('#back').onclick = showHome;
   $('#start').onclick = startTracking;
+  let undo = null;
+  $('#find-lanes').onclick = () => {
+    if (!checkCorners()) return;
+    const { rgba, width, height } = state.source.frame();
+    const res = findLaneLines(rgba, width, height, setup.corners, setup.lanes, lengthMetres(setup));
+    if (!res.found) {
+      $('#find-msg').textContent = 'No lane ropes found near the lines. Move the dots closer (or check the number of lanes) and try again.';
+      return;
+    }
+    undo = setup.corners;
+    setup.corners = res.corners;
+    $('#undo-dots').hidden = false;
+    $('#find-msg').textContent = `Found ${res.found} lane rope${res.found === 1 ? '' : 's'}. Check the lines sit on them.`;
+    saveSetup(setup);
+    checkCorners();
+    draw();
+  };
+  $('#undo-dots').onclick = () => {
+    if (!undo) return;
+    setup.corners = undo;
+    undo = null;
+    $('#undo-dots').hidden = true;
+    $('#find-msg').textContent = '';
+    saveSetup(setup);
+    draw();
+  };
   checkCorners();
 }
 

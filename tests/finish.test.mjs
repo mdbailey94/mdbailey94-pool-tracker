@@ -39,7 +39,7 @@ test('head-on: hand touch on the wall in each lane', () => {
   for (const r of rs) {
     const res = session.result(r.lane);
     assert.equal(res.method, 'auto');
-    near(res.time, sim.reaches(r, 25) - startAt, 0.08, `lane ${r.lane + 1}`);
+    near(res.time, sim.touchTime(r) - startAt, 0.15, `lane ${r.lane + 1}`);
   }
   assert.equal(session.lanes[2], null, 'unwatched lane');
   assert.ok(session.allDone);
@@ -53,28 +53,49 @@ test('side-on: touch, swimmers crossing the picture', () => {
       { lane: 2, speed: 1.45, t0: 1.6, from: 0 },
     ],
   });
-  for (const r of rs) near(session.result(r.lane).time, sim.reaches(r, 25) - 1, 0.08, `lane ${r.lane + 1}`);
+  for (const r of rs) near(session.result(r.lane).time, sim.touchTime(r) - 1, 0.15, `lane ${r.lane + 1}`);
 });
 
-test('side-on: crossing a line mid-pool', () => {
+test('side-on: head crossing a line mid-pool, arms reaching ahead', () => {
+  // At the app's own processing width: in a far lane seen from the side the
+  // head is only a few pixels tall.
   const { sim, rs, session } = race({
     view: 'side',
     finish: 'line',
     at: 20,
     depth: 4,
+    width: 480,
     racers: [
       { lane: 1, speed: 1.8, t0: 1.5, from: 0, through: true },
-      { lane: 3, speed: 1.4, t0: 1.5, from: 0, through: true },
+      { lane: 3, speed: 1.4, t0: 1.5, from: 0, through: true, rate: 40 },
     ],
   });
-  // Nothing cancels out here as it does for a touch: the line is crossed by
-  // the first part of the swimmer the camera clearly sees, and in a far lane
-  // seen from the side an arm is under a pixel thick, so the head and
-  // shoulders lead.
-  const [nearLane, farLane] = rs;
-  near(session.result(nearLane.lane).time, sim.reaches(nearLane, 20) - 1, 0.12, 'near lane');
-  near(session.result(farLane.lane).time, sim.reaches(farLane, 20) - 1, 0.3, 'far lane');
-  assert.ok(session.result(farLane.lane).time >= sim.reaches(farLane, 20) - 1 - 0.05, 'never early');
+  // Timed on the head, not the hands that cross up to 0.6 m earlier.
+  for (const r of rs) near(session.result(r.lane).time, sim.reaches(r, 20) - 1, 0.08, `lane ${r.lane + 1}`);
+});
+
+test('head-on: head crossing a line (e.g. 15 m mark)', () => {
+  const { sim, rs, session } = race({
+    finish: 'line',
+    at: 15,
+    depth: 4,
+    racers: [
+      { lane: 0, speed: 1.7, t0: 1.5, from: 0, through: true },
+      { lane: 2, speed: 1.3, t0: 1.5, from: 0, through: true, rate: 34 },
+    ],
+  });
+  for (const r of rs) near(session.result(r.lane).time, sim.reaches(r, 15) - 1, 0.08, `lane ${r.lane + 1}`);
+});
+
+test('the head is followed through the arm strokes', () => {
+  const lf = new LaneFinish({ mode: 'line', depth: 5, over: 1.5 });
+  // Head at 1.5 m/s reaching the line at t = 3; a hand 0.6 m ahead half the time.
+  for (let t = 0; t < 2.5; t += 1 / 30) {
+    const head = 4.5 - 1.5 * t;
+    const reach = (t * 1.6) % 1 < 0.5 ? 0.6 : 0;
+    lf.push(t, { lead: Math.floor((head - reach) / 0.1) * 0.1 + 0.05 }, false); // centre of the cell it is in
+  }
+  near(lf.head, 4.5 - 1.5 * 2.47, 0.08, "head estimate");
 });
 
 test('works at 25 fps and with a lower-resolution picture', () => {
@@ -83,7 +104,7 @@ test('works at 25 fps and with a lower-resolution picture', () => {
     width: 240,
     racers: [{ lane: 1, speed: 1.75, t0: 1.6, from: 0 }, { lane: 2, speed: 1.5, t0: 1.6, from: 0 }],
   });
-  for (const r of rs) near(session.result(r.lane).time, sim.reaches(r, 25) - 1, 0.1, `lane ${r.lane + 1}`);
+  for (const r of rs) near(session.result(r.lane).time, sim.touchTime(r) - 1, 0.15, `lane ${r.lane + 1}`);
 });
 
 test('something sitting at the wall is not a finish', () => {

@@ -3,9 +3,10 @@
 
 import { applyH, cornersValid } from './homography.js';
 import {
-  FinishSession, RACE_STROKES, VIEW_CORNERS, bandToImage, formatRaceTime, raceCSV, raceLane, raceLaneLabel,
-  raceRecord, raceRows,
+  CAMERA_PRESETS, FinishSession, POOL_PRESETS, RACE_STROKES, bandToImage, formatRaceTime, poolPresetOf, raceCSV,
+  raceLane, raceLaneLabel, raceRecord, raceRows, swapLaneOrder,
 } from './finish.js';
+import { findLaneLines } from './lanes.js';
 import { YARD } from './session.js';
 import { keepAwake } from './capture.js';
 import { deleteRace, download, loadRaceSetup, loadRaces, saveRace, saveRaceSetup } from './store.js';
@@ -80,11 +81,17 @@ export function createRaceUI(env) {
     for (let k = 0; k < setup.lanes; k++) {
       const on = raceLane(setup, k).track;
       const ln = snap?.lanes[k];
-      // Where the swimmer's front is, while they close in.
+      // The swimmer's head as they close in (and their front edge, faintly).
       if (ln && !ln.result && ln.lead !== null && ln.lead < D) {
-        ctx.lineWidth = 3 * dpr;
-        ctx.strokeStyle = '#7cf29c';
-        env.line(P(k + 0.1, Math.max(0, ln.lead)), P(k + 0.9, Math.max(0, ln.lead)));
+        ctx.lineWidth = 2 * dpr;
+        ctx.strokeStyle = 'rgba(124,242,156,.5)';
+        env.line(P(k + 0.15, Math.max(0, ln.lead)), P(k + 0.85, Math.max(0, ln.lead)));
+        if (ln.head !== null && ln.head < D) {
+          const [hx, hy] = P(k + 0.5, Math.max(0, ln.head));
+          ctx.lineWidth = 3 * dpr;
+          ctx.strokeStyle = '#7cf29c';
+          ctx.beginPath(); ctx.arc(hx, hy, 9 * dpr, 0, Math.PI * 2); ctx.stroke();
+        }
       }
       const [x, y] = P(k + 0.5, Math.min(D * 0.5, 0.8));
       ctx.fillStyle = on ? 'rgba(255,255,255,.95)' : 'rgba(255,255,255,.35)';
@@ -122,16 +129,23 @@ export function createRaceUI(env) {
     panel.innerHTML = `
       <section class="card">
         <h2>Set up the finish</h2>
-        <div class="seg" role="radiogroup" aria-label="Camera view">
-          <label><input type="radio" name="view" value="head" ${setup.view === 'head' ? 'checked' : ''}><span>Coming towards camera</span></label>
-          <label><input type="radio" name="view" value="side" ${setup.view === 'side' ? 'checked' : ''}><span>Side on</span></label>
+        <div class="row">
+          <label class="field">Camera <select id="camera">${Object.entries(CAMERA_PRESETS).map(([k, p]) => opt(k, setup.camera, p.label)).join('')}</select></label>
+          <label class="field">Pool <select id="pool">${Object.entries(POOL_PRESETS).map(([k, p]) => opt(k, poolPresetOf(setup), p.label)).join('')}${opt('custom', poolPresetOf(setup), 'Other')}</select></label>
         </div>
         <div class="seg" role="radiogroup" aria-label="Finish">
           <label><input type="radio" name="finish" value="touch" ${setup.finish === 'touch' ? 'checked' : ''}><span>Touch on the wall</span></label>
-          <label><input type="radio" name="finish" value="line" ${setup.finish === 'line' ? 'checked' : ''}><span>Crossing a line</span></label>
+          <label><input type="radio" name="finish" value="line" ${setup.finish === 'line' ? 'checked' : ''}><span>Head crossing a line</span></label>
         </div>
         <p class="small" id="view-hint">${esc(VIEW_HINT[setup.view])}</p>
         <ol class="corner-key">${DOT_NAMES.map((n, i) => `<li><span class="corner-dot">${i + 1}</span>${n}</li>`).join('')}</ol>
+        <p class="small muted">Put the dots roughly in place, then <b>Find lanes</b> lines the lanes up with the ropes.</p>
+        <div class="actions">
+          <button class="btn secondary" id="find-lanes">Find lanes</button>
+          <button class="btn secondary" id="swap-lanes" title="Lane 1 at the other end of the finish">Swap lane order</button>
+          <button class="btn secondary" id="undo-dots" hidden>Undo</button>
+        </div>
+        <p class="small" id="find-msg" role="status"></p>
         <div class="row">
           <label class="field">Dots 3–4 are back <input id="depth" type="number" min="1" max="25" step="any" value="${setup.depth}"></label>
           <label class="field">Unit <select id="unit">${opt('m', setup.unit, 'metres')}${opt('yd', setup.unit, 'yards')}</select></label>
@@ -164,15 +178,57 @@ export function createRaceUI(env) {
       const v = Number($(id).value);
       return Number.isFinite(v) && v >= lo && v <= hi ? v : fallback;
     };
-    panel.querySelectorAll('input[name="view"]').forEach((r) => r.addEventListener('change', () => {
-      setup.view = r.value;
-      // Start the dots from a shape that suits the view.
-      setup.corners = VIEW_CORNERS[r.value].map((p) => [...p]);
-      $('#view-hint').textContent = VIEW_HINT[r.value];
+    // Moving the dots in one go (preset, swap, find) can be undone.
+    let undo = null;
+    const moveDots = (corners, msg = '') => {
+      undo = setup.corners.map((p) => [...p]);
+      setup.corners = corners.map((p) => [...p]);
+      $('#undo-dots').hidden = false;
+      $('#find-msg').textContent = msg;
       saveRaceSetup(setup);
       checkDots();
       env.draw();
-    }));
+    };
+    $('#camera').addEventListener('change', (ev) => {
+      const p = CAMERA_PRESETS[ev.target.value];
+      setup.camera = ev.target.value;
+      setup.view = p.view;
+      $('#view-hint').textContent = VIEW_HINT[p.view];
+      // Start the dots from a shape that suits where the camera is.
+      moveDots(p.corners, 'Dots moved to suit the camera. Drag them onto the finish and back line.');
+    });
+    $('#pool').addEventListener('change', (ev) => {
+      const p = POOL_PRESETS[ev.target.value];
+      if (!p) return;
+      Object.assign(setup, { unit: p.unit, depth: p.depth, distance: p.distance });
+      $('#unit').value = p.unit;
+      $('#depth').value = p.depth;
+      $('#distance').value = p.distance;
+      saveRaceSetup(setup);
+      env.draw();
+    });
+    $('#swap-lanes').onclick = () => moveDots(swapLaneOrder(setup.corners), `Lane ${setup.firstLane} is now at the other end.`);
+    $('#undo-dots').onclick = () => {
+      if (!undo) return;
+      setup.corners = undo;
+      undo = null;
+      $('#undo-dots').hidden = true;
+      $('#find-msg').textContent = '';
+      saveRaceSetup(setup);
+      checkDots();
+      env.draw();
+    };
+    $('#find-lanes').onclick = () => {
+      if (!checkDots()) return;
+      const { rgba, width, height } = state.source.frame();
+      const res = findLaneLines(rgba, width, height, setup.corners, setup.lanes, metres(setup.depth));
+      if (!res.found) {
+        $('#find-msg').textContent = 'No lane ropes found near the dots. Move them closer to the ropes (or set the number of lanes) and try again.';
+        return;
+      }
+      moveDots(res.corners, `Found ${res.found} lane rope${res.found === 1 ? '' : 's'} and lined the lanes up with ${res.found === 1 ? 'it' : 'them'}.`
+        + (res.found === 1 ? ' With one rope only the position is fixed, not the lane width: check the lines.' : ' Check the lines sit on the ropes.'));
+    };
     panel.querySelectorAll('input[name="finish"]').forEach((r) => r.addEventListener('change', () => {
       setup.finish = r.value;
       saveRaceSetup(setup);
@@ -181,6 +237,7 @@ export function createRaceUI(env) {
       setup.depth = num('#depth', 1, 25, setup.depth);
       setup.unit = $('#unit').value;
       setup.distance = num('#distance', 1, 2000, setup.distance);
+      $('#pool').value = poolPresetOf(setup);
       setup.stroke = $('#stroke').value;
       setup.event = $('#event').value.trim();
       setup.ignore = num('#ignore', 0, 600, setup.ignore);
@@ -407,7 +464,7 @@ export function createRaceUI(env) {
       const el = $(`#time-${ln.lane}`);
       el.innerHTML = ln.result
         ? `${formatRaceTime(ln.result.time)}${ln.result.method === 'manual' ? '<span class="tag">tap</span>' : ''}`
-        : s.started ? (ln.lead !== null && ln.lead < s.depth ? `${ln.lead.toFixed(1)} m` : '…') : '–';
+        : s.started ? (ln.lead !== null && ln.lead < s.depth ? `${Math.max(0, ln.head ?? ln.lead).toFixed(1)} m` : '…') : '–';
       el.classList.toggle('in', Boolean(ln.result));
       panel.querySelector(`[data-tap="${ln.lane}"]`).hidden = Boolean(ln.result) || !s.started;
       panel.querySelector(`[data-clear="${ln.lane}"]`).hidden = !ln.result;

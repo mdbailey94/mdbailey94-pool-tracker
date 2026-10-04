@@ -77,3 +77,24 @@ export function cornersValid(corners) {
   }
   return true;
 }
+
+// Least-squares homography through any number (≥ 4) of point pairs, each
+// with a weight: the best compromise when some points are surer than others.
+export function fitHomography(src, dst, weights = src.map(() => 1)) {
+  const AtA = Array.from({ length: 8 }, () => new Array(8).fill(0));
+  const Atb = new Array(8).fill(0);
+  const add = (row, rhs, w) => {
+    for (let i = 0; i < 8; i++) {
+      Atb[i] += w * row[i] * rhs;
+      for (let j = 0; j < 8; j++) AtA[i][j] += w * row[i] * row[j];
+    }
+  };
+  src.forEach(([x, y], i) => {
+    const [u, v] = dst[i];
+    const w = weights[i];
+    add([x, y, 1, 0, 0, 0, -u * x, -u * y], u, w);
+    add([0, 0, 0, x, y, 1, -v * x, -v * y], v, w);
+  });
+  const h = solve(AtA, Atb);
+  return h ? [...h, 1] : null;
+}
