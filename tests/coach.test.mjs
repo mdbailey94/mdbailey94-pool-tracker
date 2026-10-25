@@ -245,3 +245,13 @@ test("the coach's week counts CNS as Build, Today and the Week do (circuit round
     assert.match(coachContext({ state: st, learned: lw, cns: () => 12.5 }), /CNS points written: Mon 12\.5\./);
   }
 });
+
+test('the coach sees each block\'s description, with or without lines', async () => {
+  const { coachContext } = await import('../src/coach.js');
+  const { defaultPlan, makeBlock } = await import('../src/practice.js');
+  const plan = defaultPlan('2026-10-19');
+  const blocks = [makeBlock({ name: 'Made-up pull', category: 'pull', minutes: 20, lines: ['4 x 200 pull   2:50'], detail: 'Paddles off for the last one' })];
+  const state = { plan, blocks, log: [], debriefs: [], style: null, prefs: {} };
+  const text = coachContext({ state, learned: { weights: {}, calibration: {}, writing: null }, date: '2026-10-20', slot: 'AM' });
+  assert.match(typeof text === 'string' ? text : JSON.stringify(text), /description: Paddles off for the last one/);
+});

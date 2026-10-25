@@ -248,3 +248,27 @@ test('connectors(): a null answer is not kept, so the next click asks again', as
     globalThis.window.claude = saved;
   }
 });
+
+test('block descriptions: kept in saved practices, back when editing, in the doc under each block', async () => {
+  const { draftBlock } = await import('../src/pw/load.js');
+  const main = { ...lib[1], detail: 'Hold stroke count.\nFast feet off walls', lines: ['4 x 100 free   1:20'] };
+  const r = rec('2026-10-20', 'AM', [lib[0], main]);
+  assert.equal(r.blocks[1].detail, 'Hold stroke count.\nFast feet off walls');
+  assert.deepEqual(r.blocks[0].equipment, lib[0].equipment);
+  // Editing it again: the library block (as it is now) with this practice's description.
+  const c = { state: { blocks: [{ ...main, detail: 'library text', lines: ['5 x 100 free   1:20'] }] }, uid: () => 'k1' };
+  const { block, missing } = draftBlock(c, r.blocks[1]);
+  assert.equal(missing, false);
+  assert.equal(block.detail, 'Hold stroke count.\nFast feet off walls');
+  assert.deepEqual(block.lines, ['5 x 100 free   1:20']);
+  // In the doc: italic lines under the heading; inside a circuit, after the block's lines.
+  const ps = recordsParagraphs([r], { ...ctx, state: { ...ctx.state, prefs: {} } });
+  const at = ps.findIndex((p) => /^Short warm-up|^Aerobic/.test(p.text) && p.bold);
+  assert.ok(ps.some((p) => p.italic && p.text === 'Hold stroke count.') && ps.some((p) => p.italic && p.text === 'Fast feet off walls'), at);
+  const circ = rec('2026-10-20', 'AM', [{ ...main, circuit: true }, { ...lib[2], circuit: true, detail: 'Long glide' }], 2);
+  const [section] = recordSections(circ, { ...ctx, state: { ...ctx.state, prefs: {} } });
+  assert.deepEqual(section.lines.filter((l) => typeof l !== 'string'), [{ note: 'Hold stroke count.\nFast feet off walls' }, { note: 'Long glide' }]);
+  // Hidden descriptions stay out of the doc.
+  const hidden = recordsParagraphs([r], { ...ctx, state: { ...ctx.state, prefs: { showDetail: false } } });
+  assert.ok(!hidden.some((p) => /stroke count/.test(p.text)));
+});

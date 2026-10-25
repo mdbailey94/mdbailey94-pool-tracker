@@ -7,7 +7,7 @@ import { CATEGORY_GEAR, addDays, daysBetween, fmtDistance, logSummary, longDate,
 import { actualTotals } from '../../learn.js';
 import { gearYards, parseSet } from '../../setlang.js';
 import { focusLabel } from '../render.js';
-import { savedBlock } from '../load.js';
+import { draftBlock } from '../load.js';
 import { openDebrief, replaceDraft } from '../guards.js';
 import { updateDebriefDot } from '../app.js';
 import { summaryText } from './debrief.js';
@@ -153,9 +153,9 @@ export function render(ctx, el) {
       if (!(await replaceDraft(ctx, 'this one'))) return;
       let missing = 0;
       const blocks = (r.blocks || []).map((rb) => {
-        const lib = state.blocks.find((x) => x.id === rb.id);
-        if (!lib) missing += 1;
-        return { ...(lib || savedBlock(rb)), circuit: !!rb.circuit, key: ctx.uid('k') };
+        const { block, missing: gone } = draftBlock(ctx, rb);
+        if (gone) missing += 1;
+        return block;
       });
       state.draft = { date: state.today, slot: r.slot || 'AM', title: r.title || '', focus: r.focus || null, rounds: r.rounds > 1 ? r.rounds : 3, pattern: r.pattern || 'even', blocks };
       if (missing) ctx.toast(`${missing} block${missing === 1 ? ' is' : 's are'} no longer in the library; using the saved copy`);

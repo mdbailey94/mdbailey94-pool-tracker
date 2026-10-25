@@ -97,25 +97,37 @@ function oddsEvens(text) {
 
 // A section's lines without blank lines at either end.
 function trimBlank(lines) {
+  const blank = (l) => typeof l === 'string' && !l.trim();
   let a = 0;
   let b = lines.length;
-  while (a < b && !String(lines[a] ?? '').trim()) a++;
-  while (b > a && !String(lines[b - 1] ?? '').trim()) b--;
+  while (a < b && blank(lines[a])) a++;
+  while (b > a && blank(lines[b - 1])) b--;
   return lines.slice(a, b);
 }
 
-// A session → paragraphs. sections: [{ title, minutes, lines: [string], note }]
+// A description (one italic paragraph per line of it).
+const noteParagraphs = (text) => String(text || '').split('\n').map((t) => t.trim()).filter(Boolean).map((t) => ({ text: t, italic: true }));
+
+// A session → paragraphs. sections: [{ title, minutes, lines, note }], where
+// a line is a set line (string) or { note } (a block's description inside a
+// circuit), and `note` is the block's description under its heading.
 export function sessionParagraphs({ weekday, slot, note = '', sections = [], groups = [] }) {
-  const column = sendOffColumn(sections.flatMap((s) => s.lines || []));
+  const column = sendOffColumn(sections.flatMap((s) => (s.lines || []).filter((l) => typeof l === 'string')));
   const out = [{ text: dayHeading(weekday, slot), bold: true }];
-  if (note) out.push({ text: note, italic: true });
+  out.push(...noteParagraphs(note));
   out.push({ text: '', spacer: true });
   sections.forEach((s, i) => {
     out.push({ text: blockHeading(s.title, s.minutes), bold: true });
-    if (s.note) out.push({ text: s.note, italic: true });
+    out.push(...noteParagraphs(s.note));
     const lines = trimBlank(s.lines || []);
-    const typed = parseSet(lines.join('\n')).lines;
-    lines.forEach((raw, j) => out.push(lineParagraph(raw, column, typed.length === lines.length ? typed[j] : null, groups)));
+    const sets = lines.filter((l) => typeof l === 'string');
+    const typed = parseSet(sets.join('\n')).lines;
+    let k = 0;
+    lines.forEach((raw) => {
+      if (typeof raw !== 'string') { out.push(...noteParagraphs(raw?.note)); return; }
+      out.push(lineParagraph(raw, column, typed.length === sets.length ? typed[k] : null, groups));
+      k += 1;
+    });
     if (i < sections.length - 1) out.push({ text: '', spacer: true });
   });
   out.push({ text: '' });

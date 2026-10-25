@@ -672,6 +672,7 @@ export function practiceRecord({ date, title, focus, slot = 'AM', position, bloc
     blocks: blocks.map((b) => ({
       id: b.id, name: b.name, category: b.category, stroke: b.stroke, circuit: !!b.circuit,
       gears: b.gears || [], lines: b.lines || [], source: b.source || '',
+      detail: b.detail || '', equipment: b.equipment || [],
       minutes: sizes.get(b)?.minutes ?? null, distance: sizes.get(b)?.distance ?? null,
     })),
     minutes: composed.minutes,

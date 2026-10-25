@@ -83,16 +83,19 @@ export function recordSections(record, ctx) {
   const blocks = (record.blocks || []).map((b) => ({ equipment: [], ...b, source: 'saved', circuit: !!b.circuit }));
   const composed = recordComposed({ ...record, blocks }, ctx.state.plan);
   const unit = composed.unit;
+  // Descriptions go in when the coach shows them (Build's "Show block descriptions").
+  const desc = (b) => (ctx.state.prefs?.showDetail === false ? '' : String(b.detail || '').trim());
   return composed.sections.map((s) => {
     if (s.type === 'block') {
       const lines = blockLines(s.block, ctx, null, record.slot || 'AM');
-      return { title: s.block.name, minutes: s.block.minutes || s.minutes, lines };
+      return { title: s.block.name, minutes: s.block.minutes || s.minutes, note: desc(s.block), lines };
     }
     const lines = s.rounds > 1 ? [`${s.rounds} rounds:`] : [];
     s.items.forEach((it, i) => {
       const ls = circuitLines(it, ctx, record.slot || 'AM');
       if (i) lines.push('');
       lines.push(...(ls.length ? ls : [shareLine(it, unit)]));
+      if (desc(it.block)) lines.push({ note: desc(it.block) });
     });
     return { title: s.items.map((it) => bareName(it.block)).join(' + '), minutes: s.minutes, lines };
   });

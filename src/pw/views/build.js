@@ -61,6 +61,24 @@ function metaText(b, unit) {
     .filter(Boolean).join(' · ');
 }
 
+// The first line of a description, for the collapsed row.
+const peek = (t) => { const l = String(t || '').split('\n')[0].trim(); return l.length > 90 ? `${l.slice(0, 88)}…` : l; };
+
+// The library block a practice block came from, when it is still there.
+const libraryBlock = (ctx, b) => ctx.state.blocks.find((x) => x.id === b.id) || null;
+
+// "Save to the block" / "Use the block's" when this practice's description
+// differs from the library block's.
+function descActions(ctx, b) {
+  const lib = libraryBlock(ctx, b);
+  const differs = !!lib && (lib.detail || '') !== (b.detail || '');
+  return `<div class="b-desc-actions" data-desc-actions="${ctx.esc(b.key)}" ${differs ? '' : 'hidden'}>
+    <span class="muted small">Only this practice so far.</span>
+    <button type="button" class="btn secondary small-btn" data-desc-save="${ctx.esc(b.key)}">Save to the block</button>
+    <button type="button" class="btn secondary small-btn" data-desc-reset="${ctx.esc(b.key)}">Use the block's</button>
+  </div>`;
+}
+
 function blockRow(ctx, b, i, n, slot, open) {
   const { esc } = ctx;
   const notes = carryForward(ctx.state.debriefs, b.id, 2);
@@ -70,6 +88,7 @@ function blockRow(ctx, b, i, n, slot, open) {
     <div class="info">
       <button type="button" class="b-disc" data-lines="${esc(b.key)}" aria-expanded="${open}"><span class="b-caret" aria-hidden="true">${open ? '▾' : '▸'}</span>${esc(b.name)}</button>
       <div class="meta">${esc(metaText(b, ctx.state.plan.unit))}${b.circuit ? ' <span class="badge circuit">circuit</span>' : ''}${last?.verdict ? ` <span class="badge">last: ${esc(VERDICTS[last.verdict].toLowerCase())}</span>` : ''}</div>
+      ${!open && b.detail ? `<div class="b-desc-peek">${esc(peek(b.detail))}</div>` : ''}
     </div>
     <div class="ctl">
       <button type="button" class="icon-btn ${b.circuit ? 'on' : ''}" data-circ="${i}" title="Blend into the circuit" aria-pressed="${!!b.circuit}" ${CATEGORIES[b.category]?.main ? '' : 'disabled'}>Circuit</button>
@@ -78,8 +97,10 @@ function blockRow(ctx, b, i, n, slot, open) {
       <button type="button" class="icon-btn danger" data-rm="${i}" aria-label="Remove ${esc(b.name)}">✕</button>
     </div>
     ${open ? `<div class="b-lines">
-      ${lines.length ? linesHTML(lines) : `<p class="muted small">${b.detail ? esc(b.detail) : 'No set lines written for this block yet. Add them in Blocks, or use Write a block.'}</p>`}
-      ${lines.length && b.detail ? `<p class="detail small">${esc(b.detail)}</p>` : ''}
+      ${lines.length ? linesHTML(lines) : '<p class="muted small">No set lines written for this block yet. Add them in Blocks, or use Write a block.</p>'}
+      <label class="field b-desc">Description <span class="muted small">(prints under the block's heading)</span>
+        <textarea data-desc="${esc(b.key)}" rows="2" placeholder="Cues, focus, what you want from this block today">${esc(b.detail || '')}</textarea></label>
+      ${descActions(ctx, b)}
       ${notes.map((x) => `<div class="carry"><b>${esc(x.date)}${x.verdict ? ` · ${esc(VERDICTS[x.verdict])}` : ''}</b>${x.why ? ` — ${esc(x.why)}` : ''}${x.changed ? `<br>Changed: ${esc(x.changed)}` : ''}${x.times ? `<br>Times: ${esc(x.times)}` : ''}</div>`).join('')}
     </div>` : ''}
   </div>`;
@@ -185,7 +206,7 @@ export function render(ctx, el) {
       <div class="eyebrow">${esc([longDate(draft.date), draft.slot, meta.phase, info.focus && `${focusLabel(info.focus)}`].filter(Boolean).join(' · '))}</div>
       <h3 id="d-head">${esc(meta.title || 'Written practice')}</h3>
       ${practiceHTML(composed, ctx, { slot: draft.slot, showDetail })}
-      <label class="field inline"><input type="checkbox" id="d-detail" ${showDetail ? 'checked' : ''}> Show block notes</label>
+      <label class="field inline"><input type="checkbox" id="d-detail" ${showDetail ? 'checked' : ''}> Show block descriptions</label>
       <div class="actions">
         <button type="button" class="btn" id="d-save">${replacing ? 'Save changes' : 'Save to log'}</button>
         ${replacing ? '<button type="button" class="btn secondary" id="d-save-new">Save as a new practice</button>' : ''}
@@ -226,6 +247,50 @@ export function render(ctx, el) {
   });
 
   $$('[data-lines]', el).forEach((b) => { b.onclick = () => { ui.open[b.dataset.lines] = !ui.open[b.dataset.lines]; rr(); }; });
+
+  // Descriptions: typed into this practice's copy of the block. The preview
+  // and the text follow in place (a redraw would take the cursor away).
+  const byKey = (key) => draft.blocks.find((x) => x.key === key);
+  const refreshPreview = () => {
+    const box = $('#preview .practice', el);
+    if (box) box.outerHTML = practiceHTML(composed, ctx, { slot: draft.slot, showDetail });
+    text = practiceTextFor(composed, ctx, meta);
+    const pre = $('#d-text', el);
+    if (pre) pre.textContent = text;
+  };
+  $$('[data-desc]', el).forEach((t) => {
+    t.oninput = () => {
+      const b = byKey(t.dataset.desc);
+      if (!b) return;
+      b.detail = t.value;
+      const lib = libraryBlock(ctx, b);
+      const actions = $(`[data-desc-actions="${b.key}"]`, el);
+      if (actions) actions.hidden = !lib || (lib.detail || '') === (b.detail || '');
+      refreshPreview();
+    };
+  });
+  $$('[data-desc-save]', el).forEach((btn) => {
+    btn.onclick = async () => {
+      const b = byKey(btn.dataset.descSave);
+      const lib = b && libraryBlock(ctx, b);
+      if (!lib) return;
+      btn.disabled = true;
+      const detail = String(b.detail || '').trim();
+      const saved = await ctx.save.block({ ...lib, detail });
+      b.detail = detail;
+      ctx.toast(saved ? `Saved the description to ${lib.name}` : `${lib.name}: description not saved yet`);
+      rr();
+    };
+  });
+  $$('[data-desc-reset]', el).forEach((btn) => {
+    btn.onclick = () => {
+      const b = byKey(btn.dataset.descReset);
+      const lib = b && libraryBlock(ctx, b);
+      if (!lib) return;
+      b.detail = lib.detail || '';
+      rr();
+    };
+  });
   $$('[data-circ]', el).forEach((b) => { b.onclick = () => { const x = draft.blocks[+b.dataset.circ]; x.circuit = !x.circuit; rr(); }; });
   $$('[data-up]', el).forEach((b) => { b.onclick = () => { const i = +b.dataset.up; [draft.blocks[i - 1], draft.blocks[i]] = [draft.blocks[i], draft.blocks[i - 1]]; rr(); }; });
   $$('[data-down]', el).forEach((b) => { b.onclick = () => { const i = +b.dataset.down; [draft.blocks[i + 1], draft.blocks[i]] = [draft.blocks[i], draft.blocks[i + 1]]; rr(); }; });

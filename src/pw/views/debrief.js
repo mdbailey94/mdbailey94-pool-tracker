@@ -143,7 +143,7 @@ function sectionHTML(ctx, d, s, i, rec) {
   const open = sectionTouched(s) || !!d._open?.[i];
   return `<section class="card b-sec ${s.skipped ? 'skipped' : ''}" data-sec="${i}">
     <div class="b-sec-head">
-      <div class="info"><div class="eyebrow">Set ${i + 1}${tag ? ` · ${esc(tag)}` : ''}</div><h3>${esc(s.name || `Set ${i + 1}`)}</h3>${planned ? `<div class="muted small">${esc(planned)}</div>` : ''}</div>
+      <div class="info"><div class="eyebrow">Set ${i + 1}${tag ? ` · ${esc(tag)}` : ''}</div><h3>${esc(s.name || `Set ${i + 1}`)}</h3>${planned ? `<div class="muted small">${esc(planned)}</div>` : ''}${rb?.detail ? `<p class="small b-sec-desc">${esc(rb.detail)}</p>` : ''}</div>
       <label class="field inline b-skip"><input type="checkbox" data-skip="${i}" ${s.skipped ? 'checked' : ''}> Skipped</label>
     </div>
     ${lines.length ? `<details class="b-set"><summary>The set as written</summary>${linesHTML(lines)}</details>` : ''}

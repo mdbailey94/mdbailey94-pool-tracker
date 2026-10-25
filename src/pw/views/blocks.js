@@ -126,21 +126,53 @@ function bindPaste(ctx, el, ui) {
 
 // ---------------------------------------------------------------- library
 
+// What the search box matches: name, description, category and lines.
+const searchText = (b) => [b.name, b.detail, catLabel(b.category), STROKE_LABEL[b.stroke], ...(b.lines || [])].join(' ').toLowerCase();
+const matches = (b, q) => !q || q.split(/\s+/).every((w) => searchText(b).includes(w));
+
 function libraryHTML(ctx, ui) {
   const { state, esc } = ctx;
   const unit = state.plan.unit;
-  const groups = Object.keys(CATEGORIES).map((c) => [c, state.blocks.filter((b) => b.category === c)]).filter(([, l]) => l.length);
+  const q = String(ui.q || '').trim().toLowerCase();
+  const pool = ui.noDesc ? state.blocks.filter((b) => !b.detail) : state.blocks;
+  const groups = Object.keys(CATEGORIES).map((c) => [c, pool.filter((b) => b.category === c)]).filter(([, l]) => l.length);
   const inDraft = state.draft.blocks?.length || 0;
+  const without = state.blocks.filter((b) => !b.detail).length;
   return `<section class="card" id="bk-library">
     <div class="c-head"><h2>Library</h2><span class="muted small">${state.blocks.length} block${state.blocks.length === 1 ? '' : 's'}${inDraft ? ` · ${inDraft} in the practice being built` : ''}</span></div>
-    ${groups.length ? '' : '<p class="muted">No blocks yet. Paste a set above or restore the starter blocks below.</p>'}
-    ${groups.map(([c, list]) => `
+    ${state.blocks.length ? `<div class="bk-find">
+      <input type="search" id="bk-q" value="${esc(ui.q || '')}" placeholder="Search names, descriptions and lines" aria-label="Search the library" autocomplete="off">
+      <button type="button" class="chip ${ui.noDesc ? 'on' : ''}" id="bk-nodesc" aria-pressed="${!!ui.noDesc}">No description yet (${without})</button>
+    </div>` : ''}
+    ${groups.length ? '' : `<p class="muted">${state.blocks.length ? 'Every block has a description.' : 'No blocks yet. Paste a set above or restore the starter blocks below.'}</p>`}
+    ${groups.map(([c, list]) => `<div class="bk-group" data-group="${esc(c)}">
       <div class="group-title">${esc(catLabel(c))}</div>
-      <div class="rows">${list.map((b) => rowHTML(ctx, b, unit, !!ui.open[b.id], ui.flash === b.id)).join('')}</div>`).join('')}
+      <div class="rows">${list.map((b) => rowHTML(ctx, b, unit, !!ui.open[b.id], ui.flash === b.id, !matches(b, q), ui)).join('')}</div></div>`).join('')}
+    <p class="muted small" id="bk-none" ${groups.length && !groups.some(([, l]) => l.some((b) => matches(b, q))) ? '' : 'hidden'}>Nothing matches “${esc(ui.q || '')}”.</p>
   </section>`;
 }
 
-function rowHTML(ctx, b, unit, open, flash) {
+// Shows only the rows that match the search, without a redraw (which would
+// take the cursor out of the box).
+function applySearch(ctx, el, ui) {
+  const q = String(ui.q || '').trim().toLowerCase();
+  let any = false;
+  ctx.$$('.bk-group', el).forEach((g) => {
+    let shown = 0;
+    ctx.$$('[data-row]', g).forEach((row) => {
+      const b = ctx.state.blocks.find((x) => x.id === row.dataset.row);
+      const hit = !!b && matches(b, q);
+      row.hidden = !hit;
+      if (hit) shown += 1;
+    });
+    g.hidden = !shown;
+    if (shown) any = true;
+  });
+  const none = ctx.$('#bk-none', el);
+  if (none) { none.hidden = any || !ctx.$$('.bk-group', el).length; none.textContent = `Nothing matches “${ui.q || ''}”.`; }
+}
+
+function rowHTML(ctx, b, unit, open, flash, hidden = false, ui = {}) {
   const { esc } = ctx;
   const meta = [
     measureText(b, unit),
@@ -150,9 +182,11 @@ function rowHTML(ctx, b, unit, open, flash) {
     b.equipment.length ? b.equipment.join(', ') : null,
   ].filter(Boolean).join(' · ');
   const lines = open ? blockLines(b, ctx) : [];
-  return `<div class="brow c-row ${flash ? 'c-flash' : ''}" data-row="${esc(b.id)}">
+  const desc = ui.desc?.[b.id] ?? b.detail ?? '';
+  return `<div class="brow c-row ${flash ? 'c-flash' : ''}" data-row="${esc(b.id)}" ${hidden ? 'hidden' : ''}>
     <button type="button" class="c-disc" data-open="${esc(b.id)}" aria-expanded="${open}" aria-label="${open ? 'Hide' : 'Show'} the lines of ${esc(b.name)}">${open ? '▾' : '▸'}</button>
-    <div class="info"><div class="name">${esc(b.name)}</div><div class="meta">${esc(meta)}</div></div>
+    <div class="info"><div class="name">${esc(b.name)}</div><div class="meta">${esc(meta)}</div>
+      ${!open && b.detail ? `<div class="b-desc-peek">${esc(b.detail.split('\n')[0].slice(0, 120))}</div>` : ''}</div>
     <div class="ctl">
       <button type="button" class="icon-btn" data-add="${esc(b.id)}" title="Add to the practice being built" aria-label="Add ${esc(b.name)} to the practice">＋</button>
       <button type="button" class="icon-btn" data-edit="${esc(b.id)}">Edit</button>
@@ -160,15 +194,49 @@ function rowHTML(ctx, b, unit, open, flash) {
     ${open ? `<div class="c-lines">
       ${lines.length ? linesHTML(lines) : '<p class="muted small">No set lines yet. Edit the block to write them, or let the app write them.</p>'}
       ${b.lines.length ? `<div class="c-times"><span>Time per group</span><b>${esc(groupTimes(b.lines, ctx.learned.writing))}</b></div>` : ''}
-      ${b.detail ? `<p class="detail small">${esc(b.detail)}</p>` : ''}
+      <label class="field b-desc">Description <span class="muted small">(what to watch for, cues, why this block; prints under its heading)</span>
+        <textarea data-bdesc="${esc(b.id)}" rows="2" placeholder="e.g. Hold stroke count on the 100s; fast feet off every wall">${esc(desc)}</textarea></label>
+      <div class="b-desc-actions" data-bdesc-actions="${esc(b.id)}" ${desc !== (b.detail || '') ? '' : 'hidden'}>
+        <button type="button" class="btn small-btn" data-bdesc-save="${esc(b.id)}">Save description</button>
+        <button type="button" class="btn secondary small-btn" data-bdesc-undo="${esc(b.id)}">Undo</button>
+      </div>
       ${b.source && SOURCE[b.source] ? `<p class="muted small">Source: ${esc(SOURCE[b.source])}</p>` : ''}
     </div>` : ''}
   </div>`;
 }
 
 function bindLibrary(ctx, el, ui) {
-  const { $$, state } = ctx;
+  const { $, $$, state } = ctx;
   ui.flash = null;
+  ui.desc ||= {};
+  const q = $('#bk-q', el);
+  if (q) q.oninput = () => { ui.q = q.value; applySearch(ctx, el, ui); };
+  $('#bk-nodesc', el)?.addEventListener('click', () => { ui.noDesc = !ui.noDesc; ctx.rerender(); });
+  // A description typed in a row is kept (across redraws) until it is saved.
+  $$('[data-bdesc]', el).forEach((t) => {
+    t.oninput = () => {
+      const id = t.dataset.bdesc;
+      const b = state.blocks.find((x) => x.id === id);
+      ui.desc[id] = t.value;
+      const actions = $(`[data-bdesc-actions="${id}"]`, el);
+      if (actions) actions.hidden = !b || t.value === (b.detail || '');
+    };
+  });
+  $$('[data-bdesc-undo]', el).forEach((btn) => { btn.onclick = () => { delete ui.desc[btn.dataset.bdescUndo]; ctx.rerender(); }; });
+  $$('[data-bdesc-save]', el).forEach((btn) => {
+    btn.onclick = async () => {
+      const id = btn.dataset.bdescSave;
+      const b = state.blocks.find((x) => x.id === id);
+      if (!b) return;
+      btn.disabled = true;
+      // Not saved: the app says so and offers Try again; the text stays in the box.
+      if (await ctx.save.block({ ...b, detail: String(ui.desc[id] ?? '').trim() })) {
+        delete ui.desc[id];
+        ctx.toast(`Saved the description of ${b.name}`);
+      }
+      ctx.rerender();
+    };
+  });
   $$('[data-open]', el).forEach((b) => { b.onclick = () => { ui.open[b.dataset.open] = !ui.open[b.dataset.open]; ctx.rerender(); }; });
   $$('[data-edit]', el).forEach((b) => {
     b.onclick = () => { ui.editing = b.dataset.edit; ui.form = null; ui.returnTo = null; ctx.rerender(); window.scrollTo({ top: 0 }); };
@@ -251,10 +319,11 @@ function editorHTML(ctx, f) {
       <button type="button" class="btn secondary" id="bk-write">${f.lines.trim() ? 'Write new lines for me' : 'Write lines for me'}</button>
     </div>
     <div id="bk-lines-preview">${linesPreview(ctx, f)}</div>
-    <label class="field">Notes<textarea data-f="detail" rows="3" placeholder="What to watch for, cues, why this block">${esc(f.detail)}</textarea></label>
+    <label class="field">Description <span class="muted small">(prints under the block's heading; each practice can change it)</span><textarea data-f="detail" rows="3" placeholder="What to watch for, cues, why this block">${esc(f.detail)}</textarea></label>
     <p class="form-error" id="bk-err" hidden></p>
     <div class="actions">
       <button type="button" class="btn" id="bk-save">${ctx.state.ui.blocks.returnTo === 'build' ? 'Save and add to practice' : 'Save block'}</button>
+      ${f.isNew ? '' : '<button type="button" class="btn secondary" id="bk-copy">Save as a copy</button>'}
       <button type="button" class="btn secondary" id="bk-cancel">Cancel</button>
       ${f.isNew ? '' : '<button type="button" class="btn secondary danger" id="bk-del">Delete</button>'}
     </div>
@@ -340,6 +409,15 @@ function bindEditor(ctx, el, ui) {
     // Not saved: the app says so and offers Try again (the block stays off the list).
     if (await ctx.save.removeBlock(f.id)) ctx.toast('Block deleted');
     close(ctx, ui);
+  });
+  // A variant of this block: the form as it is, saved as a new block (the
+  // original stays as it was).
+  $('#bk-copy', el)?.addEventListener('click', () => {
+    const orig = ctx.state.blocks.find((x) => x.id === f.id);
+    if (orig && f.name.trim() === orig.name) f.name = `${orig.name} (copy)`;
+    f.id = null;
+    f.isNew = true;
+    $('#bk-save', el).click();
   });
   $('#bk-save', el).onclick = async () => {
     const err = $('#bk-err', el);

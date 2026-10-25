@@ -80,3 +80,15 @@
 .c-row .ctl { flex: none; }
 #se-phases .grid3 { grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(0, 1fr); }
 #se-phases .days select { appearance: none; -webkit-appearance: none; padding: 0 2px; text-align: center; text-align-last: center; font-size: 12px; }
+
+/* Block descriptions (Blocks library rows and Build's practice rows) and
+   the library search. */
+.bk-find { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 4px 0 8px; }
+.bk-find input { flex: 1 1 220px; min-width: 0; padding: 8px 10px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg); color: var(--text); font: inherit; }
+.b-desc-peek { margin-top: 2px; font-size: 13px; color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.b-desc { margin: 10px 0 0; }
+.b-desc textarea { min-height: 52px; }
+.b-desc-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 6px; }
+.b-desc-actions[hidden], .bk-group[hidden], .brow[hidden] { display: none; }
+.b-sec-desc { margin: 4px 0 0; color: var(--text-2); font-style: italic; white-space: pre-line; }
+.practice .detail, .b-lines .detail, .c-lines .detail { white-space: pre-line; }

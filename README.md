@@ -78,7 +78,12 @@ and the coach's own blocks, and learns from what happens on deck.
   PM, 20 minutes, legs are tired") and get practices back in their notation, built from the library, gear
   chart, recent practices and debriefs. Offline, pasting a set saves it as a block.
 - **Build.** Order blocks, blend some into a circuit, choose how rounds differ (even, descending,
-  ascending, build a gear each round, hard last round), save to the log.
+  ascending, build a gear each round, hard last round), save to the log. Each block has a description for
+  that practice (cues, focus), filled from the library block's and saved with the practice; "Save to the
+  block" makes it the library block's own.
+- **Blocks.** The library: search names, descriptions and lines; list the blocks with no description yet and
+  write one in place; edit a block line by line or save a variant as a copy. Descriptions print under the
+  block in the practice, its text, the debrief and the Google Doc (in italics), and the coach chat sees them.
 - **Debrief.** Per section: good / mixed / bad and why, what changed, intervals (too easy / right / too hard),
   made the send-offs, goal times, drills working. Debriefs move send-offs per gear and stroke, raise or lower
   blocks in suggestions, and bring notes back the next time a block comes up.

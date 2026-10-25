@@ -11,7 +11,7 @@ import {
 } from '../../practice.js';
 import { BANDS, draftWeek, weekGaps, weekOf, weekTotals } from '../../week.js';
 import { focusLabel, practiceHTML, practiceTextFor } from '../render.js';
-import { savedBlock, savedRecord, weekCns } from '../load.js';
+import { draftBlock, savedRecord, weekCns } from '../load.js';
 import { openDebrief, replaceDraft } from '../guards.js';
 import { updateDebriefDot } from '../app.js';
 import { bindDocCard, docCardHTML, inDoc, weekDocFor } from '../doc-card.js';
@@ -464,9 +464,9 @@ async function editRecord(ctx, r, debriefed) {
   // the saved copy; kept on its own date and slot, replacing it on save.
   let missing = 0;
   const blocks = (r.blocks || []).map((rb) => {
-    const lib = state.blocks.find((x) => x.id === rb.id);
-    if (!lib) missing += 1;
-    return { ...(lib || savedBlock(rb)), circuit: !!rb.circuit, key: ctx.uid('k') };
+    const { block, missing: gone } = draftBlock(ctx, rb);
+    if (gone) missing += 1;
+    return block;
   });
   state.draft = { date: r.date, slot: r.slot || 'AM', title: r.title || '', focus: r.focus || null, rounds: r.rounds > 1 ? r.rounds : 3, pattern: r.pattern || 'even', blocks, replaces: r.id, back: 'week' };
   if (missing) ctx.toast(`${missing} block${missing === 1 ? ' is' : 's are'} no longer in the library; using the saved copy`);

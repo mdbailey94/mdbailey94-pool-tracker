@@ -72,3 +72,13 @@ export function savedRecord(ctx, fields) {
 // A saved practice's block as a block again (its saved copy, when the
 // library no longer has it), in its own measure.
 export const savedBlock = (rb) => makeBlock(rb.measure === 'distance' ? { ...rb, minutes: null } : rb);
+
+// A saved practice's block back in the builder: the library block when it
+// still exists (its lines as they are now) with the description written for
+// that practice, else the saved copy. `missing` when the library lost it.
+export function draftBlock(ctx, rb) {
+  const lib = ctx.state.blocks.find((x) => x.id === rb.id);
+  const base = lib || savedBlock(rb);
+  const detail = typeof rb.detail === 'string' ? { detail: rb.detail } : {};
+  return { block: { ...base, ...detail, circuit: !!rb.circuit, key: ctx.uid('k') }, missing: !lib };
+}
