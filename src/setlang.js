@@ -14,12 +14,15 @@
 // Pure functions, no DOM. Times are seconds.
 
 import {
-  DEFAULT_GEAR_MODEL, cnsPoints, fmtClock, gearIndex, gearPaces, imPaces, makeGearModel, paceOf, parseClock, roundSendOff, sendOff, strokeOffset, testForGearPace,
+  DEFAULT_GEAR_MODEL, cnsPoints, fmtClock, gearIndex, gearPaces, imPaces, makeGearModel, paceOf, parseClock, roundSendOff, sendOff, shiftGear,
+  strokeOffset, testForGearPace,
 } from './gears.js';
 
 const CLOCK = String.raw`(?:\d{1,2}:\d{2}(?:\.\d)?|:\d{2})`;
 // Send-off columns at the end of a line, after a space or an "@" ("@1:20").
 const COLS_RE = new RegExp(String.raw`(?:^|\s|(?<=@))(${CLOCK}(?:\s*\|\s*${CLOCK})*)\s*$`);
+const REST_RE = new RegExp(String.raw`^(${CLOCK})\s*rest\b\.?\s*(.*)$`, 'i');
+const ADJUST_RE = new RegExp(String.raw`^(${CLOCK}|\d+(?:st|nd|rd|th)\s+interval)\s*-\s+(.+)$`, 'i');
 const STROKE_WORDS = [
   [/\b(IMO|IM)\b/, 'IM'], [/\b(FL|fly|butterfly)\b/i, 'fly'], [/\b(BK|back|backstroke)\b/i, 'back'],
   [/\b(BR|breast|breaststroke)\b/i, 'breast'], [/\b(FR|free|freestyle)\b/i, 'free'], [/\b(choice|YC|CH)\b/i, 'choice'],
@@ -31,8 +34,40 @@ const EQUIPMENT_WORDS = [
 
 // ------------------------------------------------------------------ parse
 
-// One line of a set → a typed object (always has `type` and `raw`).
+// Lines already read, by their text (a block's lines are read again on every
+// render), up to LINES_MAX of them.
+const LINES = new Map();
+const LINES_MAX = 5000;
+
+// Freeze what a typed line holds, so no reader can change a line kept in LINES.
+function frozen(l) {
+  for (const v of Object.values(l)) if (v && typeof v === 'object') Object.freeze(v);
+  return Object.freeze(l);
+}
+
+// One line of a set → a typed object (always has `type` and `raw`). Each call
+// gets its own copy of the line (its arrays are shared and frozen).
 export function parseLine(raw) {
+  if (typeof raw !== 'string') return readLine(raw);
+  let l = LINES.get(raw);
+  if (!l) {
+    if (LINES.size >= LINES_MAX) LINES.clear();
+    l = frozen(readLine(raw));
+    LINES.set(raw, l);
+  }
+  return { ...l };
+}
+
+// The send-off columns at the end of a line and the text before them, as the
+// page and the doc lay them out: "3 x 300 free   3:35|3:50" →
+// { left: '3 x 300 free', cols: '3:35 | 3:50' }; cols is '' when there are none.
+export function splitCols(raw) {
+  const text = String(raw ?? '').replace(/\s+$/, '');
+  const m = COLS_RE.exec(text);
+  return m ? { left: text.slice(0, m.index).trim(), cols: m[1].replace(/\s*\|\s*/g, ' | ') } : { left: text.trim(), cols: '' };
+}
+
+function readLine(raw) {
   const text = String(raw ?? '').replace(/\t/g, '    ').replace(/[–—]/g, '-').replace(/->/g, '→').trim();
   if (!text) return { type: 'blank', raw };
 
@@ -46,10 +81,10 @@ export function parseLine(raw) {
   m = /^(\d+)\s*rounds?\s*:?\s*$/i.exec(text) || /^(\d+)\s*x\s*:?\s*$/i.exec(text);
   if (m) return { type: 'rounds', raw, rounds: +m[1] };
 
-  m = new RegExp(String.raw`^(${CLOCK})\s*rest\b\.?\s*(.*)$`, 'i').exec(text);
+  m = REST_RE.exec(text);
   if (m) return { type: 'rest', raw, seconds: parseClock(m[1]), note: m[2].trim() };
 
-  m = new RegExp(String.raw`^(${CLOCK}|\d+(?:st|nd|rd|th)\s+interval)\s*-\s+(.+)$`, 'i').exec(text);
+  m = ADJUST_RE.exec(text);
   if (m) return { type: 'adjust', raw, key: m[1], text: m[2].trim() };
 
   if (/^#\d/.test(text) || /^(odds?|evens?)\s*:/i.test(text) || /^G\d(\.\d)?\s*=/.test(text) || /^(add up|choice\s*=|swim time)/i.test(text)) {
@@ -147,43 +182,40 @@ export function intervalFor(line, g) {
   return iv[Math.min(g, iv.length - 1)];
 }
 
+// Every line of a parsed set with how many times it is swum: `fn(line,
+// times)`, times being its "N rounds:" count inside a round group, else 1.
+export function eachItem(parsed, fn) {
+  for (const it of parsed.structure) {
+    if (it.type === 'rounds') for (const l of it.items) fn(l, it.rounds);
+    else fn(it, 1);
+  }
+}
+
 // Seconds the set takes for group column g (null intervals count as
 // `fallback(line)` seconds, default 0).
 export function setSeconds(parsed, g = 0, fallback = () => 0) {
-  const itemSeconds = (l) => {
-    if (l.type === 'swim') {
-      const iv = intervalFor(l, g);
-      return l.reps * (iv ?? fallback(l) ?? 0);
-    }
-    if (l.type === 'rest' || l.type === 'timed') return l.seconds || 0;
-    return 0;
-  };
   let total = 0;
-  for (const it of parsed.structure) {
-    if (it.type === 'rounds') total += it.rounds * it.items.reduce((s, l) => s + itemSeconds(l), 0);
-    else total += itemSeconds(it);
-  }
+  eachItem(parsed, (l, times) => {
+    if (l.type === 'swim') total += times * l.reps * (intervalFor(l, g) ?? fallback(l) ?? 0);
+    else if (l.type === 'rest' || l.type === 'timed') total += times * (l.seconds || 0);
+  });
   return total;
 }
 
 // Distance of the whole set (rounds counted).
 export function setDistance(parsed) {
-  const d = (l) => (l.type === 'swim' ? l.reps * l.distance : 0);
   let total = 0;
-  for (const it of parsed.structure) {
-    if (it.type === 'rounds') total += it.rounds * it.items.reduce((s, l) => s + d(l), 0);
-    else total += d(it);
-  }
+  eachItem(parsed, (l, times) => { if (l.type === 'swim') total += times * l.reps * l.distance; });
   return Math.round(total);
 }
 
 // Gears a set uses, in order of first appearance (progressions expanded).
 export function setGears(parsed) {
   const seen = [];
-  const add = (g) => { if (/^G\d(\.\d)?$/.test(g) && !seen.includes(g)) seen.push(g); };
+  const add = (g) => { if (gearIndex(g) != null && !seen.includes(g)) seen.push(g); };
   for (const l of parsed.lines) {
     if (l.type !== 'swim') continue;
-    if (l.gearFrom && /^G\d/.test(l.gearTo || '')) gearSpan(l.gearFrom, l.gearTo).forEach(add);
+    if (l.gearFrom && gearIndex(l.gearTo) != null) gearSpan(l.gearFrom, l.gearTo).forEach(add);
     l.gears.forEach(add);
   }
   return seen;
@@ -191,7 +223,7 @@ export function setGears(parsed) {
 
 // The gears a progression passes through, both ends included, either way:
 // G2.5 → G4 = G2.5, G3, G4; G5 → G3 = G5, G4, G3.
-export function gearSpan(from, to) {
+function gearSpan(from, to) {
   const a = gearIndex(from), b = gearIndex(to);
   if (a == null || b == null) return [from, to].filter((g) => gearIndex(g) != null);
   const out = [from];
@@ -212,19 +244,17 @@ export function formatColumns(values) {
 
 // A swim line in the coach's notation, with send-offs for each group.
 export function writeSwim(line, intervals = line.intervals) {
-  const head = line.reps > 1 ? `${line.reps} x ${fmtDist(line.distance)}` : fmtDist(line.distance);
+  const head = line.reps > 1 ? `${line.reps} x ${line.distance}` : String(line.distance);
   const body = [head, line.desc].filter(Boolean).join(' ');
   if (!intervals?.length) return body;
   const same = intervals.every((v) => v === intervals[0]);
   return `${body}    ${same ? fmtClock(intervals[0]) : formatColumns(intervals)}`;
 }
 
-const fmtDist = (d) => (Number.isInteger(d) ? String(d) : String(d));
-
 // Shift every gear on a line by `by` (G2 → G3), capped at G6.
 export function shiftLineGears(text, by) {
   if (!by) return text;
-  return text.replace(/\bG(\d)(\.\d)?\b/g, (_, n, f) => `G${Math.min(6, Math.max(1, +n + by))}${f || ''}`);
+  return text.replace(/\bG\d(\.\d)?\b/g, (g) => shiftGear(g, by));
 }
 
 // Scale a line's reps (for descending / ascending rounds): 6 x 50 at 0.5 → 3 x 50.
@@ -258,7 +288,7 @@ export function styleKey(l, withStroke = false) {
   let g = 'none';
   if (l.easy) g = 'easy';
   else if (l.oddsEvens) g = 'oe';
-  else if (l.gearFrom) g = `${l.gearFrom}>${/^G\d/.test(l.gearTo || '') ? l.gearTo : 'pace'}`;
+  else if (l.gearFrom) g = `${l.gearFrom}>${gearIndex(l.gearTo) != null ? l.gearTo : 'pace'}`;
   else if (l.pace) g = 'pace';
   else if (l.gears?.length > 1 && !l.mix) g = l.gears.join('/'); // "[G3 / G4 / G5 / G6]" is not a G6 line
   else if (l.gears?.length) g = l.gears[l.gears.length - 1];
@@ -360,7 +390,6 @@ export function learnStyle(texts, model = DEFAULT_GEAR_MODEL) {
 // ------------------------------------------------------------- intervals
 
 // Everything needed to put send-offs on lines for each group.
-// plan.groups: [{ id, name, key, test: {distance, seconds} } | { …, g3: secondsPer100 }]
 // plan.groups: [{ id, name, key, test: {distance, seconds} | g3: secondsPer100, im400: seconds }]
 // (fastest first). Without groups, one group is made from plan.pace.
 export function writingContext(plan, { style = null, calibration = {} } = {}) {
@@ -380,7 +409,7 @@ export function writingContext(plan, { style = null, calibration = {} } = {}) {
 
 // The gear a line is mostly swum in (middle of a progression).
 export function lineGear(l) {
-  if (l.gearFrom && /^G\d/.test(l.gearTo || '')) {
+  if (l.gearFrom && gearIndex(l.gearTo) != null) {
     const a = gearIndex(l.gearFrom), b = gearIndex(l.gearTo);
     return `G${Math.round((a + b) / 2)}`;
   }
@@ -613,7 +642,8 @@ export function blockSecondsByGroup(lines, ctx) {
 // short speed → kick → easy, sized so the fastest group finishes in the
 // block's minutes, with skips for slower groups.
 
-const ABBR = { free: 'free', back: 'BK', breast: 'BR', fly: 'FL', IM: 'IM', choice: 'choice' };
+// Strokes as the coach writes them on a set line ("3 x 100 free", "6 x 50 FL").
+export const STROKE_ABBR = { free: 'free', back: 'BK', breast: 'BR', fly: 'FL', IM: 'IM', choice: 'choice' };
 
 // Generic coaching shapes written for the app (no line comes from any
 // coach's library; a coach's own patterns are learned from their blocks).
@@ -621,7 +651,7 @@ const ABBR = { free: 'free', back: 'BK', breast: 'BR', fly: 'FL', IM: 'IM', choi
 // G3 at most; no reference row). A template without rounds is a straight set
 // whose first line grows to fill the time.
 function templates(focus, s, slot) {
-  const st = ABBR[s] || 'free';
+  const st = STROKE_ABBR[s] || 'free';
   // A 25 or 50 can't be an IM: short reps go in IM order.
   const sh = st === 'IM' ? 'IMO' : st;
   const easySt = st === 'IM' ? 'choice' : st;
@@ -684,7 +714,8 @@ function templates(focus, s, slot) {
 // "4 x 50 …" → "6 x 50 …"; a single swim ("100 IM G4, strong walls") gets reps in front.
 const setReps = (raw, reps) => (/^\d+\s*x\s*/.test(raw) ? raw.replace(/^\d+\s*x\s*/, reps > 1 ? `${reps} x ` : '') : reps > 1 ? `${reps} x ${raw}` : raw);
 
-export function generateBlock({ focus = 'aerobic', minutes = 40, stroke = 'free', slot = 'AM', ctx, variant = 0 }) {
+// `category`, when given, is the block's category (else the focus says it).
+export function generateBlock({ focus = 'aerobic', minutes = 40, stroke = 'free', slot = 'AM', ctx, variant = 0, category = null }) {
   const t = templates(focus, stroke, slot);
   const restLine = ctx.style?.restLine || ':20 REST';
   const build = (rounds, mainReps, withPre = true) => {
@@ -735,8 +766,8 @@ export function generateBlock({ focus = 'aerobic', minutes = 40, stroke = 'free'
   return {
     name: `${mins} min ${t.title}`,
     minutes: mins,
-    category: focus === 'im' ? 'race' : ({ aerobic: 'aerobic', threshold: 'threshold', race: 'race', speed: 'speed', technique: 'technique', recovery: 'technique', kick: 'kick', warmup: 'warmup', cooldown: 'cooldown' }[focus] || 'aerobic'),
-    stroke: stroke === 'IM' ? 'IM' : stroke,
+    category: category || (focus === 'im' ? 'race' : ({ aerobic: 'aerobic', threshold: 'threshold', race: 'race', speed: 'speed', technique: 'technique', recovery: 'technique', kick: 'kick', warmup: 'warmup', cooldown: 'cooldown' }[focus] || 'aerobic')),
+    stroke,
     gears: setGears(parsed),
     session: slot === 'PM' ? 'PM' : 'AM',
     lines: all,
@@ -811,28 +842,34 @@ const PACE_GEAR = [[/\b1650|mile\b/i, 'G3.5'], [/\b1000\b/, 'G4'], [/\b500\b|\b4
 export function gearYards(parsed) {
   const out = {};
   const add = (g, y) => { out[g] = (out[g] || 0) + y; };
-  const line = (l, times) => {
+  eachItem(parsed, (l, times) => {
     if (l.type !== 'swim') return;
     const y = l.reps * l.distance * times;
     let gears = [];
-    if (l.gearFrom && /^G\d/.test(l.gearTo || '')) gears = gearSpan(l.gearFrom, l.gearTo);
+    if (l.gearFrom && gearIndex(l.gearTo) != null) gears = gearSpan(l.gearFrom, l.gearTo);
     else if (l.gears.length) gears = l.gears;
     else if (l.pace) gears = [PACE_GEAR.find(([re]) => re.test(l.pace))?.[1] || 'G5'];
     else gears = [l.easy ? 'G1' : 'G2'];
     gears.forEach((g) => add(g, y / gears.length));
-  };
-  for (const it of parsed.structure) {
-    if (it.type === 'rounds') it.items.forEach((l) => line(l, it.rounds));
-    else line(it, 1);
-  }
+  });
   for (const k of Object.keys(out)) out[k] = Math.round(out[k]);
   return out;
 }
 
-// Yards per gear of a block's lines as one round of a circuit prints them:
-// gears shifted and reps scaled as writeLines writes them (send-offs don't
-// change the yards, so no group is timed).
-export const linesGearYards = (lines, { gearShift = 0, scale = 1 } = {}) => gearYards(parseSet(writeLines(lines, YARDS_ONLY, { gearShift, scale }).join('\n')));
+// Kick yards in a set (rounds counted).
+export function kickYards(parsed) {
+  let kick = 0;
+  eachItem(parsed, (l, times) => { if (l.type === 'swim' && l.kind === 'kick') kick += times * l.reps * l.distance; });
+  return kick;
+}
+
+// Yards per gear and kick yards of a block's lines as one round of a circuit
+// prints them: gears shifted and reps scaled as writeLines writes them
+// (send-offs don't change the yards, so no group is timed).
+export function linesYards(lines, { gearShift = 0, scale = 1 } = {}) {
+  const parsed = parseSet(writeLines(lines, YARDS_ONLY, { gearShift, scale }).join('\n'));
+  return { byGear: gearYards(parsed), kick: kickYards(parsed) };
+}
 const YARDS_ONLY = { groups: [] };
 
 // CNS points for block lines.

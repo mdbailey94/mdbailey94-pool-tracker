@@ -7,6 +7,7 @@ import {
   makeBlock, mondayOf, nextMeet, sessionsOn, suggestPractice, uid,
 } from '../../practice.js';
 import { generateBlock } from '../../setlang.js';
+import { slotHour } from '../../week.js';
 import { focusLabel, practiceHTML } from '../render.js';
 import { cnsBefore } from '../load.js';
 import { openDebrief, replaceDraft } from '../guards.js';
@@ -335,7 +336,6 @@ function debriefCard(ctx) {
 function loadCard(ctx, day) {
   const { state, esc } = ctx;
   const model = ctx.learned.writing.model;
-  const hour = (slot) => (slot === 'PM' ? 16 : 6);
   const slots = day.sessions.length ? day.sessions : [{ slot: 'AM', focus: null }];
   const { recent: recs, left } = cnsBefore(state.log, state.today, slots.map((s) => s.slot), ctx);
   const rows = slots.map((s, i) => ({ s, left: left[i].left }));
@@ -344,7 +344,7 @@ function loadCard(ctx, day) {
   return `<section class="card tw-load">
     <div class="eyebrow">Load</div>
     <h3>CNS left from the last 2 days</h3>
-    ${recs.length ? `<div class="tw-cns">${rows.map(({ s, left }) => `<div><span class="muted small">${day.sessions.length ? `${s.slot} · ${hour(s.slot)}:00` : 'This morning'}</span><b class="${left > 5 ? 'hi' : ''}">${left}</b></div>`).join('')}</div>
+    ${recs.length ? `<div class="tw-cns">${rows.map(({ s, left }) => `<div><span class="muted small">${day.sessions.length ? `${s.slot} · ${slotHour(s.slot)}:00` : 'This morning'}</span><b class="${left > 5 ? 'hi' : ''}">${left}</b></div>`).join('')}</div>
       ${contrib.length ? `<p class="muted small">${contrib.map((x) => `${esc(dayName(x.record.date))} ${esc(x.record.slot || 'AM')}: ${Math.round(x.points * 10) / 10}`).join(' · ')} (points when swum; half gone every ${model.cnsHalfLifeHours || 12} h)</p>` : '<p class="muted small">Nothing above G3 in the last 2 days.</p>'}`
     : '<p class="muted small">No practices in the log for the last 2 days, so nothing is left over.</p>'}
     ${worst ? `<div class="banner alert"><span>${worst.left} points still left before the ${esc(worst.s.slot)} ${esc(focusLabel(worst.s.focus).toLowerCase())} session. A high-CNS session wants under 5: keep the G5–G6 work short, give it more rest, or swap it with an aerobic day.</span></div>` : ''}

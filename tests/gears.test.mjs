@@ -342,3 +342,17 @@ test('cnsResidual halves every 12 hours and ignores sessions still to come', () 
   assert.equal(cnsResidual({ cnsHalfLifeHours: 6 }, [{ at: 0, points: 40 }], 12), 10);
   assert.equal(cnsResidual({}, [], 24), 0);
 });
+
+// ------------------------------------------------------------- built models
+
+test('a model makeGearModel built is handed back as it is; gears shift within G1–G6', async () => {
+  const { shiftGear } = await import('../src/gears.js');
+  const m = makeGearModel({ fatigue: 1.07 });
+  assert.equal(makeGearModel(m), m);
+  assert.notEqual(makeGearModel(DEFAULT_GEAR_MODEL), DEFAULT_GEAR_MODEL, 'the defaults are settings, not a built model');
+  assert.equal(sendOff(m, gearPaces(m, { distance: 1650, seconds: 1200 }), { gear: 'G3', distance: 100 }), sendOff({ fatigue: 1.07 }, gearPaces(m, { distance: 1650, seconds: 1200 }), { gear: 'G3', distance: 100 }));
+  assert.equal(shiftGear('G2.5', 1), 'G3.5');
+  assert.equal(shiftGear('G5', 3), 'G6');
+  assert.equal(shiftGear('G2', -3), 'G1');
+  assert.equal(shiftGear('fast', 1), 'fast');
+});

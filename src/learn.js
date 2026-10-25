@@ -3,8 +3,9 @@
 // too easy (seconds per 100 to add to computed intervals), and the notes to
 // bring back the next time a block comes up. Pure functions, no DOM.
 
-import { CATEGORY_GEAR, daysBetween, uid } from './practice.js';
-import { lineGear, parseSet } from './setlang.js';
+import { byDateDesc, CATEGORY_GEAR, daysBetween, uid } from './practice.js';
+import { gearIndex } from './gears.js';
+import { eachItem, lineGear, parseSet } from './setlang.js';
 
 export const VERDICTS = { good: 'Good', mixed: 'Mixed', bad: 'Bad' };
 export const INTERVALS = { 'too-easy': 'Too easy', right: 'Right', 'too-hard': 'Too hard' };
@@ -20,7 +21,6 @@ const decay = (date, today) => {
   return 0.5 ** (age / HALF_LIFE);
 };
 
-const GEAR_RE = /^G\d(\.\d)?$/;
 const STROKE_KEYS = ['free', 'back', 'breast', 'fly', 'IM', 'all'];
 // Calibration is kept per stroke; 'all' when the stroke is unknown (choice).
 const strokeKey = (st) => (st && st !== 'choice' ? st : 'all');
@@ -38,15 +38,11 @@ export function blockTiming(b) {
     const parsed = parseSet(b.lines.join('\n'));
     const timed = parsed.lines.filter((l) => l.type === 'swim' && !l.easy);
     const named = timed.some((l) => l.stroke !== 'choice');
-    const add = (l, times) => {
+    eachItem(parsed, (l, times) => {
       if (!timed.includes(l) || (named && l.stroke === 'choice')) return;
       const key = `${lineGear(l)}|${strokeKey(l.stroke)}`;
       yards.set(key, (yards.get(key) || 0) + l.reps * l.distance * times);
-    };
-    for (const it of parsed.structure) {
-      if (it.type === 'rounds') it.items.forEach((l) => add(l, it.rounds));
-      else add(it, 1);
-    }
+    });
   }
   if (!yards.size) {
     const gears = b.gears?.length ? b.gears : [CATEGORY_GEAR[b.category]].filter(Boolean);
@@ -94,7 +90,7 @@ export function makeSection(x = {}) {
     gear: x.gear || null,
     stroke: x.stroke || null,
     timing: (Array.isArray(x.timing) ? x.timing : [])
-      .filter((t) => GEAR_RE.test(t?.gear))
+      .filter((t) => gearIndex(t?.gear) != null)
       .map((t) => ({ gear: t.gear, stroke: STROKE_KEYS.includes(t.stroke) ? t.stroke : 'all' })),
   };
 }
@@ -199,10 +195,13 @@ export function calibrationFor(cal, gear, stroke) {
   return g[stroke] ?? g.all ?? 0;
 }
 
-// The latest notes about a block, newest first, to show when it comes up again.
+// The latest notes about a block, newest first, to show when it comes up
+// again. The app keeps its debriefs newest first (byDateDesc), so they are
+// only sorted when handed over in another order.
 export function carryForward(debriefs, blockId, max = 3) {
   const out = [];
-  for (const d of [...debriefs].sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : (b.createdAt || 0) - (a.createdAt || 0)))) {
+  const sorted = debriefs.every((d, i) => i === 0 || byDateDesc(debriefs[i - 1], d) <= 0);
+  for (const d of sorted ? debriefs : [...debriefs].sort(byDateDesc)) {
     for (const s of d.sections || []) {
       if (s.blockId !== blockId || !(s.verdict || s.why || s.changed || s.times)) continue;
       out.push({ date: d.date, verdict: s.verdict, why: s.why, changed: s.changed, intervals: s.intervals, times: s.times });

@@ -11,9 +11,9 @@ import { blockCns, generateBlock, writingContext } from '../src/setlang.js';
 import { debriefFor, intervalCalibration, makeDebrief } from '../src/learn.js';
 import { blockLines, linesHTML, practiceMetrics } from '../src/pw/render.js';
 import { chips, esc } from '../src/pw/ui.js';
-import { cnsBefore, recordCns, savedBlock, savedRecord, weekCns } from '../src/pw/load.js';
+import { cnsBefore, draftBlock, recordCns, savedRecord } from '../src/pw/load.js';
 import { draftSaved, openDebrief, replaceDraft } from '../src/pw/guards.js';
-import { weekOf } from '../src/week.js';
+import { weekOf, weekTotals } from '../src/week.js';
 
 // The views import the shell (../app.js) for one helper; the shell boots the
 // page, so the tests load a stand-in for it instead.
@@ -396,7 +396,7 @@ test('a saved practice counts the same CNS as the builder showed, for every roun
     for (const rounds of [2, 3, 4]) {
       const blocks = [{ ...aerobic, circuit: true }, { ...kick, circuit: true }, { ...speed, circuit: true }];
       const composed = composePractice({ blocks, rounds, pattern, pace: plan.pace, unit: plan.unit });
-      const shown = practiceMetrics(composed, ctx, 'AM').cns; // the builder's "CNS load"
+      const shown = practiceMetrics(composed, ctx).cns; // the builder's "CNS load"
       const saved = JSON.parse(JSON.stringify(savedRecord(ctx, { date: '2026-10-28', title: '', focus: 'aerobic', slot: 'AM', blocks, rounds, pattern, composed, text: '' })));
       assert.equal(recordCns(saved, ctx), shown, `${pattern} × ${rounds}`);
     }
@@ -405,14 +405,14 @@ test('a saved practice counts the same CNS as the builder showed, for every roun
   const blocks = [{ ...aerobic, circuit: true }, { ...kick, circuit: true }];
   const composed = composePractice({ blocks, rounds: 3, pattern: 'build', pace: plan.pace, unit: plan.unit });
   const once = blocks.reduce((s, b) => s + blockCns(b.lines, ctx.learned.writing.model), 0);
-  assert.ok(practiceMetrics(composed, ctx, 'AM').cns > once * 2);
+  assert.ok(practiceMetrics(composed, ctx).cns > once * 2);
 });
 
 test("Today's Load card and the Week's CNS by day show the builder's points", () => {
   const blocks = [{ ...aerobic, circuit: true }, { ...kick, circuit: true }];
   const composed = composePractice({ blocks, rounds: 3, pattern: 'hard-last', pace: plan.pace, unit: plan.unit });
   const base = ctxFor();
-  const shown = practiceMetrics(composed, base, 'AM').cns;
+  const shown = practiceMetrics(composed, base).cns;
   const saved = savedRecord(base, { date: '2026-10-28', title: '', focus: 'aerobic', slot: 'AM', blocks, rounds: 3, pattern: 'hard-last', composed, text: '' });
 
   const page = fakePage();
@@ -423,7 +423,7 @@ test("Today's Load card and the Week's CNS by day show the builder's points", ()
   assert.equal(recent[0].points, shown);
 
   const week = weekOf({ plan, date: '2026-10-28', today: '2026-10-29', log: [saved], debriefs: [] });
-  const w = weekCns(week, ctx);
+  const w = weekTotals(week, plan, ctx.learned.writing.model);
   assert.equal(w.cnsByDay[2], shown);
   assert.ok(w.cnsMorning[3] > 0 && w.cnsMorning[3] < shown); // a day later: some of it left
   // A record saved before `measure` existed still reads back (as timed).
@@ -437,7 +437,9 @@ test('a saved block comes back in its own measure (Build again, Edit on the Week
   const blocks = [{ ...speed, circuit: true }, { ...aerobic, circuit: true }];
   const composed = composePractice({ blocks, rounds: 3, pattern: 'build', pace: plan.pace, unit: plan.unit });
   const rec = JSON.parse(JSON.stringify(savedRecord(ctx, { date: '2026-10-28', title: '', focus: 'speed', slot: 'AM', blocks, rounds: 3, pattern: 'build', composed, text: '' })));
-  const [s, a] = rec.blocks.map(savedBlock);
+  const notInLibrary = { ...ctx, state: { ...ctx.state, blocks: [] }, uid: () => 'k' };
+  const [s, a] = rec.blocks.map((rb) => draftBlock(notInLibrary, rb).block);
+  assert.equal(s.printed, undefined, 'in the builder its send-offs are written again');
   assert.equal(s.minutes, null);
   assert.ok(s.distance > 0);
   assert.equal(a.minutes, 40);

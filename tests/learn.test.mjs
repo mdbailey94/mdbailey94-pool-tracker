@@ -176,3 +176,13 @@ test('actual totals of v1 records (blocks without sizes) share the practice even
   const mixed = { ...v1, blocks: [{ ...v1.blocks[0], distance: 1000 }, v1.blocks[1]] };
   assert.deepEqual(actualTotals(mixed, with_(0, { skipped: true })), { distance: 3000, minutes: 68, changed: true });
 });
+
+test('notes come back the same when the debriefs are already newest first, as the app keeps them', () => {
+  const ds = [
+    debrief('2026-10-20', [null, null, { verdict: 'good', why: 'shorter reps worked' }]),
+    debrief('2026-10-13', [null, null, { verdict: 'mixed', why: 'made-up reason' }]),
+    debrief('2026-10-06', [null, null, { verdict: 'bad', why: 'hips sank' }]),
+  ];
+  assert.deepEqual(carryForward(ds, 'socks', 2).map((n) => n.date), ['2026-10-20', '2026-10-13']);
+  assert.deepEqual(carryForward([...ds].reverse(), 'socks', 2).map((n) => n.date), ['2026-10-20', '2026-10-13']);
+});

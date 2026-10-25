@@ -122,8 +122,9 @@ test('composing keeps separate blocks in order and blends the rest into one circ
 // ------------------------------------------------------------ v2: sessions
 
 import {
-  gearTotals, makeMeet, migratePlan, nextMeet, PATTERNS, practiceRecord, roundPlan, sessionsOn, shiftGear, splitByWeights,
+  makeMeet, migratePlan, nextMeet, PATTERNS, practiceRecord, roundPlan, sessionsOn, shiftGear, splitByWeights,
 } from '../src/practice.js';
+import { recordLoad } from '../src/week.js';
 
 test('the default week is 2 hours every morning but Sunday, doubles Tuesday and Thursday', () => {
   const p = defaultPlan('2026-09-07');
@@ -233,7 +234,10 @@ test('practice records keep sizes per block for debriefs and gear totals', () =>
   assert.deepEqual(rec.blocks.map((b) => [b.name, b.distance, b.gears[0]]), [['Kick', 600, 'G2'], ['100s', 1600, 'G3']]);
   assert.deepEqual(rec.blocks[1].lines, ['16 x 100 FR G3']);
   assert.equal(rec.blocks[1].source, 'generated', 'app-written lines stay marked (not learned as the coach\'s style)');
-  assert.deepEqual(gearTotals([rec], '2026-10-28', 7), { G2: 600, G3: 1600 });
+  assert.deepEqual(rec.blocks.map((b) => b.measure), ['distance', 'distance']);
+  const load = recordLoad(rec, { pace: 100 });
+  assert.deepEqual(load.byGear, { G2: 600, G3: 1600 });
+  assert.equal(load.kick, 600);
 });
 
 test('descending and ascending rounds never go back the other way', () => {
@@ -335,4 +339,83 @@ test('a saved practice composes again as it was built, rounds and pattern includ
   assert.equal(shareScale(null), 1);
   assert.equal(shareScale({ scale: 0.995 }), 1);
   assert.equal(shareScale({ scale: 0.5 }), 0.5);
+});
+
+// ------------------------------------------------------- shared helpers
+
+import {
+  SOURCES, STROKE_ABBR, byDateDesc, composedYards, dayLabel, focusLabel, gearsText, isOwn, planPosition as positionOf, positionText,
+  recordBlock, recordTitle, retimes, writeFocus,
+} from '../src/practice.js';
+
+test('newest first: by date, then the one saved last', () => {
+  const list = [{ id: 'a', date: '2026-10-20', createdAt: 1 }, { id: 'b', date: '2026-10-21', createdAt: 1 }, { id: 'c', date: '2026-10-20', createdAt: 5 }];
+  assert.deepEqual([...list].sort(byDateDesc).map((x) => x.id), ['b', 'c', 'a']);
+});
+
+test('block sources: the coach\'s own writing, and the app\'s send-offs re-timed until printed', () => {
+  assert.ok(isOwn({ source: 'pasted' }) && isOwn({ source: 'coach' }) && isOwn({ source: 'drive' }));
+  assert.ok(!isOwn({ source: 'claude' }), 'the coach chat writes in Claude\'s words');
+  assert.ok(!isOwn({ source: 'generated' }) && !isOwn({ source: '' }) && !isOwn({ source: 'constructor' }));
+  assert.ok(retimes({ source: 'generated' }));
+  assert.ok(!retimes({ source: 'generated', printed: true }));
+  assert.ok(!retimes({ source: 'pasted' }));
+  assert.equal(SOURCES.claude.label, 'from the coach chat');
+});
+
+test('the block writer\'s focus for a category', () => {
+  assert.equal(writeFocus('pull', 'free'), 'aerobic');
+  assert.equal(writeFocus('race', 'IM'), 'im');
+  assert.equal(writeFocus('race', 'free'), 'race');
+  assert.equal(writeFocus('warmup', 'IM'), 'warmup');
+  assert.equal(writeFocus('nonsense'), 'aerobic');
+});
+
+test('words for a practice, a focus, a day and where the season is', () => {
+  assert.equal(focusLabel('race'), 'Race pace');
+  assert.equal(focusLabel('made-up'), 'made-up');
+  assert.equal(gearsText('aerobic'), 'G1 · G2');
+  assert.equal(gearsText('aerobic', ', '), 'G1, G2');
+  assert.equal(STROKE_ABBR.back, 'BK');
+  const blocks = ['Warm-up', 'Made-up A', 'Made-up B', 'Made-up C', 'Made-up D', 'Cool-down'].map((name, i) => ({ name, category: i === 0 ? 'warmup' : i === 5 ? 'cooldown' : 'aerobic' }));
+  assert.equal(recordTitle({ title: 'Made-up title', blocks }), 'Made-up title');
+  assert.equal(recordTitle({ blocks }), 'Made-up A, Made-up B, Made-up C…');
+  assert.equal(recordTitle({ blocks: blocks.slice(0, 2) }), 'Made-up A');
+  assert.equal(recordTitle({ blocks: [blocks[0]], focus: 'speed' }), 'Speed');
+  assert.equal(recordTitle({}), 'Practice');
+  const short = new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' }).format(new Date(2026, 9, 5));
+  assert.equal(dayLabel('2026-10-05'), `Mon ${short}`);
+  const p = defaultPlan('2026-09-07');
+  const inSeason = positionOf(p, '2026-09-22'); // Base week 3
+  assert.equal(positionText(inSeason), 'Base · week 3 of 6');
+  assert.equal(positionText(inSeason, { detail: 'season' }), 'Now: Base · week 3 of 6 · season week 3');
+  assert.equal(positionText(inSeason, { detail: 'context' }), 'Base · week 3 of 6 · season week 3 of 20');
+  assert.equal(positionText(inSeason, { detail: 'week' }), 'Base · week 3 of 6 · season week 3 of 20 · volume 100%');
+  const before = positionOf(p, '2026-09-06');
+  assert.equal(positionText(before), 'Season starts in 1 day');
+  assert.equal(positionText(before, { detail: 'week' }), 'Before the season · it starts in 1 day');
+  const after = positionOf(p, '2027-03-01');
+  assert.equal(positionText(after), 'Season finished · off-season');
+  assert.equal(positionText(after, { detail: 'context' }), 'Season finished (off-season)');
+  assert.equal(positionText(after, { detail: 'week' }), 'After the season · off-season');
+  assert.equal(positionText(null), '');
+});
+
+test('a saved block reads back as printed, in its own measure, with its saved sizes', () => {
+  const kick = makeBlock({ name: 'Made-up kick', category: 'kick', distance: 600, lines: ['12 x 50 kick G2'], source: 'generated' });
+  const drill = makeBlock({ name: 'Made-up drill', category: 'technique', minutes: 12 });
+  const blocks = [{ ...kick, circuit: true }, { ...drill, circuit: false }];
+  const composed = composePractice({ blocks, rounds: 2, pace: 100, unit: 'y' });
+  const rec = JSON.parse(JSON.stringify(practiceRecord({ date: '2026-10-27', focus: 'aerobic', blocks, rounds: 2, composed, text: '' })));
+  const [k, d] = rec.blocks.map(recordBlock);
+  assert.deepEqual([k.minutes, k.distance, k.circuit, k.printed], [null, 600, true, true]);
+  assert.deepEqual([d.minutes, d.distance, d.circuit], [12, blockDistance(drill, 100), false]);
+  assert.ok(!retimes(k), 'its lines are the ones printed that day');
+  // A v1 record's block has no size, and adds nothing.
+  const v1 = recordBlock({ id: 'a', name: 'Warm-up', category: 'warmup' });
+  assert.deepEqual([v1.minutes, v1.distance], [undefined, undefined]);
+  // Kick yards: the kick lines of every round, and a kick block without lines.
+  const plainKick = makeBlock({ name: 'Made-up board kick', category: 'kick', distance: 400 });
+  assert.deepEqual(composedYards(composePractice({ blocks: [{ ...kick, circuit: true }, { ...plainKick, circuit: true }], rounds: 2, pattern: 'build', pace: 100, unit: 'y' })),
+    { byGear: { G2: 500, G3: 500 }, kick: 1000 });
 });

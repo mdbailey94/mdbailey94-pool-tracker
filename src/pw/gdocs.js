@@ -9,7 +9,7 @@ import { appendRequests, docEnd, sessionParagraphs } from '../gdoc.js';
 import { blockLines, circuitLines } from './render.js';
 
 export const DRIVE = 'Google Drive';
-export const DOCS = 'Google Docs';
+const DOCS = 'Google Docs';
 
 let mcpReady = null;
 let mcpAsking = null;
@@ -39,7 +39,6 @@ const UNKNOWN = new Set(['server_unavailable', 'upstream_error', 'cancelled', 'r
 export const outcomeUnknown = (e) => !e?.code || UNKNOWN.has(e.code);
 
 const payloadOf = (res) => res?.payload ?? res;
-const docJson = (p) => (p?.content?.documentId ? p.content : p);
 
 // What to tell the coach, by error code and by the step that failed: only a
 // create or an append can have changed Drive when the answer never came.
@@ -75,13 +74,12 @@ function bareName(b) {
 }
 
 // One record → the doc sections: each block as written that day (its saved
-// send-offs kept, not re-timed by later debriefs); blended blocks as one
-// circuit with its rounds.
+// send-offs kept, not re-timed by later debriefs: recordBlock); blended
+// blocks as one circuit with its rounds. Composed as the app composes saved
+// practices (a block measured in yards shares out its yards), so the doc
+// matches the log.
 export function recordSections(record, ctx) {
-  // Composed as the app composes saved practices (a block measured in yards
-  // shares out its yards), so the doc matches the log.
-  const blocks = (record.blocks || []).map((b) => ({ equipment: [], ...b, source: 'saved', circuit: !!b.circuit }));
-  const composed = recordComposed({ ...record, blocks }, ctx.state.plan);
+  const composed = recordComposed(record, ctx.state.plan);
   const unit = composed.unit;
   // Descriptions go in when the coach shows them (Build's "Show block descriptions").
   const desc = (b) => (ctx.state.prefs?.showDetail === false ? '' : String(b.detail || '').trim());
@@ -125,8 +123,9 @@ async function read(mcp, server, tool, input, op = 'read') {
   }
 }
 
-export async function readDoc(mcp, documentId) {
-  return docJson(await read(mcp, DOCS, 'read_doc', { documentId }));
+// The documents.get result (docEnd reads it, wrapped in `content` or not).
+async function readDoc(mcp, documentId) {
+  return read(mcp, DOCS, 'read_doc', { documentId });
 }
 
 const fileRef = (f, title = '') => ({ id: f.id, title: f.title || title || 'Google Doc', url: `https://docs.google.com/document/d/${f.id}/edit`, folderId: f.parentId || null });
@@ -174,7 +173,6 @@ export async function appendRecords(mcp, documentId, records, ctx) {
       if (!changed || attempt) throw tagged(e, 'append', DOCS);
     }
   }
-  return null;
 }
 
 // Title, link and folder of an existing doc (to link it to a week).

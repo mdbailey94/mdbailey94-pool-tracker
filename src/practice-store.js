@@ -11,24 +11,40 @@
 // with .code and .readFailed), so "could not read" is never mistaken for
 // "nothing saved yet": loadAll then rejects too and writes nothing.
 
-import { defaultPlan, makeBlock, migratePlan, starterBlocks, uid } from './practice.js';
+import { byDateDesc, defaultPlan, makeBlock, migratePlan, starterBlocks, uid } from './practice.js';
 
-export const KEYS = ['plan', 'prefs', 'style'];
-export const COLLECTIONS = ['blocks', 'log', 'debriefs'];
+const KEYS = ['plan', 'prefs', 'style'];
+const COLLECTIONS = ['blocks', 'log', 'debriefs'];
 const LOCAL = (name) => `pool-practice-${name}`; // v1 used pool-practice-blocks/plan/log/prefs
 const MAX = { log: 400, debriefs: 400 };
+const WRITES_AT_ONCE = 6; // database writes in flight at once when copying many records
 
-export const DEFAULT_PREFS = { minutes: null, equipment: null, showDetail: true, columns: true };
+const DEFAULT_PREFS = { equipment: null, showDetail: true };
 
 const isObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
 const clone = (v) => (v === undefined ? undefined : JSON.parse(JSON.stringify(v)));
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// Runs at most `n` of the functions handed to it at once, in the order given;
+// each call resolves with its function's result.
+function limiter(n) {
+  let active = 0;
+  const queue = [];
+  const next = () => {
+    while (active < n && queue.length) {
+      const { fn, resolve, reject } = queue.shift();
+      active++;
+      Promise.resolve().then(fn).then(resolve, reject).finally(() => { active--; next(); });
+    }
+  };
+  return (fn) => new Promise((resolve, reject) => { queue.push({ fn, resolve, reject }); next(); });
+}
+
 // The database's error codes, normalised: lifecycle codes mean the database
 // can't be used in this view (like 'revoked'), and unknown codes count as
 // 'unavailable', as the runtime contract asks.
 const STORE_CODES = ['invalid_argument', 'resource_exhausted', 'quota_exceeded', 'unavailable', 'revoked'];
-export function errorCode(e) {
+function errorCode(e) {
   const c = e?.code;
   if (c === 'transform_error') return 'invalid_argument';
   if (['not_granted', 'capability_disabled', 'capability_removed'].includes(c)) return 'revoked';
@@ -89,12 +105,20 @@ function readLocal(name, fallback) {
   }
 }
 
+// Returns the text stored.
 function writeLocal(name, value) {
   try {
-    globalThis.localStorage?.setItem(LOCAL(name), JSON.stringify(value));
+    const raw = JSON.stringify(value);
+    globalThis.localStorage?.setItem(LOCAL(name), raw);
+    return raw;
   } catch (e) {
     throw { code: e?.name === 'QuotaExceededError' ? 'quota_exceeded' : 'unavailable', message: String(e?.message || e) };
   }
+}
+
+// The stored text of a collection (null when there is none or it can't be read).
+function rawLocal(name) {
+  try { return globalThis.localStorage?.getItem(LOCAL(name)) ?? null; } catch { return null; }
 }
 
 // Newest first by date, capped for the collections that have a cap.
@@ -105,9 +129,48 @@ function capped(coll, list) {
 export function localBackend() {
   const w = writeTracker();
   const list = (coll) => { const v = readLocal(coll, []); return Array.isArray(v) ? v : []; };
-  // Each write reads the collection and writes it back in one step, so two
-  // quick writes can't undo each other, and a retry applies the change again.
-  const change = (path, coll, fn) => w.track(path, () => writeLocal(coll, fn(list(coll))));
+  // Each collection as last read or written here, with the text it was read
+  // from: it is read again only when the stored text is not that (another
+  // tab wrote it, or a write failed).
+  const known = new Map(); // coll → { raw, list }
+  const stored = (coll) => {
+    const raw = rawLocal(coll);
+    let c = known.get(coll);
+    if (!c || c.raw !== raw) {
+      let v = null;
+      try { v = JSON.parse(raw); } catch { v = null; }
+      c = { raw, list: Array.isArray(v) ? v : [] };
+      known.set(coll, c);
+    }
+    return c.list;
+  };
+  // The changes made to a collection in one go (this tick) are applied in
+  // order to what is stored and written back once, so two quick writes can't
+  // undo each other; they are stored together or not at all, and a retry
+  // applies its change again.
+  const queued = new Map(); // coll → { fns, promise, resolve, reject }
+  const flush = (coll) => {
+    const q = queued.get(coll);
+    queued.delete(coll);
+    try {
+      const all = q.fns.reduce((xs, fn) => fn(xs), stored(coll));
+      known.set(coll, { raw: writeLocal(coll, all), list: all });
+      q.resolve();
+    } catch (e) {
+      q.reject(e);
+    }
+  };
+  const change = (path, coll, fn) => w.track(path, () => {
+    let q = queued.get(coll);
+    if (!q) {
+      q = { fns: [] };
+      q.promise = new Promise((resolve, reject) => Object.assign(q, { resolve, reject }));
+      queued.set(coll, q);
+      queueMicrotask(() => flush(coll));
+    }
+    q.fns.push(fn);
+    return q.promise;
+  });
   return {
     kind: 'local',
     ...w.api,
@@ -164,6 +227,7 @@ export function dbBackend(db) {
   // The body is copied when the write is made, so a retry sends what the
   // coach saved then.
   const write = (path, body) => w.track(path, () => serial(path, () => retry(() => (body === undefined ? db.doc(path).delete() : db.doc(path).set(body)))));
+  const many = limiter(WRITES_AT_ONCE);
   return {
     kind: 'db',
     ...w.api,
@@ -181,10 +245,10 @@ export function dbBackend(db) {
     },
     put(coll, id, value) { return write(`${coll}/${safeId(id)}`, clone({ ...value, id })); },
     remove(coll, id) { return write(`${coll}/${safeId(id)}`, undefined); },
+    // Up to WRITES_AT_ONCE records in flight (writes to one record stay in order).
     async putMany(coll, values) {
-      let all = true;
-      for (const v of values) all = (await this.put(coll, v.id, v)) && all;
-      return all;
+      const items = clone(values);
+      return (await Promise.all(items.map((v) => many(() => this.put(coll, v.id, v))))).every(Boolean);
     },
     // Live updates from other devices: one subscription per collection and
     // key, debounced into a single callback. Each listener's first delivery
@@ -270,11 +334,12 @@ export async function openStore({ timeoutMs = 4000 } = {}) {
 export async function migrateLocalToDb(local, store) {
   const [plan, blocks] = await Promise.all([store.get('plan'), store.list('blocks')]);
   if (plan || blocks.length) return false;
-  const localPlan = await local.get('plan');
-  const localBlocks = await local.list('blocks');
-  if (!localPlan && !localBlocks.length) return false;
-  for (const key of KEYS) { const v = await local.get(key); if (v != null) await store.set(key, v); }
-  for (const coll of COLLECTIONS) await store.putMany(coll, await local.list(coll));
+  const [keys, colls] = await Promise.all([Promise.all(KEYS.map((k) => local.get(k))), Promise.all(COLLECTIONS.map((c) => local.list(c)))]);
+  if (!keys[KEYS.indexOf('plan')] && !colls[COLLECTIONS.indexOf('blocks')].length) return false;
+  await Promise.all([
+    ...KEYS.map((key, i) => (keys[i] != null ? store.set(key, keys[i]) : null)),
+    ...COLLECTIONS.map((coll, i) => store.putMany(coll, colls[i])),
+  ]);
   return true;
 }
 
@@ -302,8 +367,6 @@ export async function loadAll(store) {
   if (first) await store.putMany('blocks', out.blocks);
   return out;
 }
-
-const byDateDesc = (a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : (b.createdAt || 0) - (a.createdAt || 0));
 
 // ------------------------------------------- edits made while connecting
 
@@ -370,8 +433,9 @@ export const canon = (v) => JSON.stringify(v, (k, x) => (isObj(x) ? Object.fromE
 // be read, rather than writing an empty backup.
 export async function exportAll(store) {
   const data = { version: 2, exported: new Date().toISOString() };
-  for (const k of KEYS) data[k] = await store.get(k);
-  for (const c of COLLECTIONS) data[c] = await store.list(c);
+  const [keys, colls] = await Promise.all([Promise.all(KEYS.map((k) => store.get(k))), Promise.all(COLLECTIONS.map((c) => store.list(c)))]);
+  KEYS.forEach((k, i) => { data[k] = keys[i]; });
+  COLLECTIONS.forEach((c, i) => { data[c] = colls[i]; });
   return JSON.stringify(data, null, 2);
 }
 
@@ -382,14 +446,14 @@ export async function exportAll(store) {
 export async function importAll(store, json) {
   const data = JSON.parse(json);
   const rows = (list) => list.filter(isObj).map((x) => (x.id == null || x.id === '' ? { ...x, id: uid('i') } : x));
-  let ok = true;
-  if (data.plan) ok = (await store.set('plan', migratePlan(data.plan))) && ok;
-  if (data.prefs) ok = (await store.set('prefs', data.prefs)) && ok;
-  if (data.style) ok = (await store.set('style', data.style)) && ok;
+  const writes = [];
+  if (data.plan) writes.push(store.set('plan', migratePlan(data.plan)));
+  if (data.prefs) writes.push(store.set('prefs', data.prefs));
+  if (data.style) writes.push(store.set('style', data.style));
   for (const coll of COLLECTIONS) {
     if (!Array.isArray(data[coll])) continue;
     const items = rows(data[coll]);
-    ok = (await store.putMany(coll, coll === 'blocks' ? items.map(makeBlock) : items)) && ok;
+    writes.push(store.putMany(coll, coll === 'blocks' ? items.map(makeBlock) : items));
   }
-  return ok;
+  return (await Promise.all(writes)).every(Boolean);
 }

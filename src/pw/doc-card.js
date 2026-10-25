@@ -6,7 +6,7 @@
 
 import { addDays, longDate, mondayOf, planPosition } from '../practice.js';
 import { docIdFrom, weekDocTitle } from '../gdoc.js';
-import { appendRecords, connectors, createDoc, docInfo, docsErrorText, DOCS, DRIVE, findDocs, outcomeUnknown } from './gdocs.js';
+import { appendRecords, connectors, createDoc, docInfo, docsErrorText, DRIVE, findDocs, outcomeUnknown } from './gdocs.js';
 
 export const weekDocFor = (plan, monday) => plan.weekDocs?.[monday] || null;
 
@@ -129,7 +129,7 @@ async function send(ctx, records) {
     }
   } catch (e) {
     console.warn('Google Docs', e);
-    ctx.toast(docsErrorText(e, e?.server || DOCS), { error: true });
+    ctx.toast(docsErrorText(e), { error: true });
   }
   return added;
 }
@@ -146,7 +146,7 @@ export function addToDoc(ctx, records) {
 }
 
 // Records of the week that are written but not in its doc yet.
-export function pendingFor(ctx, week) {
+function pendingFor(ctx, week) {
   const doc = weekDocFor(ctx.state.plan, week.monday);
   return week.days.flatMap((d) => d.sessions.map((s) => s.record).filter(Boolean)).filter((r) => !inDoc(r, doc));
 }

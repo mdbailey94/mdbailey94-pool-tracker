@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { addDays, defaultPlan, makeBlock, makeMeet, practiceRecord, composePractice, starterBlocks } from '../src/practice.js';
-import { bandOf, draftWeek, phaseTargets, recordGearYards, sessionStatus, weekGaps, weekOf, weekTotals } from '../src/week.js';
+import { bandOf, draftWeek, phaseTargets, recordLoad, sessionStatus, weekGaps, weekOf, weekTotals } from '../src/week.js';
 
 const plan = defaultPlan('2026-09-07'); // made-up season: Base from Sep 7
 plan.weeklyYards = 40000;
@@ -51,9 +51,10 @@ test('gear yards come from block lines, scaled to the block, kick counted', () =
     { name: 'Set', category: 'threshold', distance: 1800, lines: ['3 rounds:', '4 x 100 free G3   1:10', '4 x 50 kick G2   1:00'] },
     { name: 'Easy', category: 'cooldown', distance: 300 },
   ]);
-  const g = recordGearYards(r);
+  const g = recordLoad(r, plan);
   assert.deepEqual(g.byGear, { G3: 1200, G2: 600, G1: 300 });
   assert.equal(g.kick, 600);
+  assert.equal(g.distance, 2100);
 });
 
 test('week totals: shares by band against the phase targets, CNS by day', () => {
@@ -142,10 +143,10 @@ test('week yards follow the lines, also for practices saved with a minutes estim
   const lines = ['3 rounds:', '6 x 100 free G2   1:20', '4 x 50 kick G2   1:00', '2 x 50 free G4   :50'];
   const fresh = rec('2026-10-27', 'AM', [{ name: '40 min aerobic', category: 'aerobic', minutes: 40, lines }]);
   assert.equal(fresh.distance, 2700);
-  assert.equal(recordGearYards(fresh).distance, 2700);
+  assert.equal(recordLoad(fresh, plan).distance, 2700);
   // Saved before sizes came from the lines: the block said 2,400y (40 min at the planning pace).
   const old = { ...fresh, distance: 2400, blocks: [{ ...fresh.blocks[0], distance: 2400 }] };
-  const g = recordGearYards(old);
+  const g = recordLoad(old, plan);
   assert.deepEqual(g.byGear, { G2: 2400, G4: 300 });
   assert.equal(g.kick, 600);
   assert.equal(g.distance, 2700);
@@ -154,14 +155,13 @@ test('week yards follow the lines, also for practices saved with a minutes estim
   assert.equal(Math.round(t.kickShare * 100), 22); // 600 of 2,700
   // A v1 record (blocks without lines or sizes) keeps its own total.
   const v1 = { id: 'v1', date: '2026-10-28', slot: 'AM', minutes: 90, distance: 4000, blocks: [{ id: 'a', name: 'Warm-up', category: 'warmup' }] };
-  assert.deepEqual(recordGearYards(v1), { byGear: {}, kick: 0, distance: 4000 });
+  assert.deepEqual(recordLoad(v1, plan), { byGear: {}, kick: 0, distance: 4000, cns: 0 });
 });
 
 // ------------------------------------------- one CNS count for the whole app
 
-import { cnsPoints } from '../src/gears.js';
-import { writingContext } from '../src/setlang.js';
-import { recordCns, savedRecord, weekCns } from '../src/pw/load.js';
+import { blockCns, writingContext } from '../src/setlang.js';
+import { recordCns, savedRecord } from '../src/pw/load.js';
 import { practiceMetrics } from '../src/pw/render.js';
 
 const appCtx = (log = []) => ({ state: { plan, log, debriefs: [] }, learned: { weights: {}, writing: writingContext(plan) } });
@@ -186,32 +186,31 @@ test('week CNS and gear bands count circuit rounds as Build, Today and the Week 
     const { record, composed } = circuitRecord(ctx, '2026-10-27', pattern);
     const w = weekOf({ plan, date: '2026-10-26', today: '2026-10-26', log: [record] });
     const t = weekTotals(w, plan, model);
-    const shown = practiceMetrics(composed, ctx, 'AM').cns; // Build's "CNS load"
+    const shown = practiceMetrics(composed, ctx).cns; // Build's "CNS load"
     assert.ok(shown > 0, pattern);
     assert.equal(t.cnsByDay[1], shown, `${pattern}: the Week's own count is Build's`);
-    assert.equal(recordCns(record, ctx), shown, `${pattern}: Today and the Week view (recordCns)`);
-    assert.deepEqual(weekCns(w, ctx), { cnsByDay: t.cnsByDay, cnsMorning: t.cnsMorning });
+    assert.equal(recordCns(record, ctx), shown, `${pattern}: Today (recordCns)`);
     // Was: each block's lines once, all in G2, and the kick block not at all.
-    assert.ok(t.cnsByDay[1] > cnsPoints(model, recordGearYards(record).byGear), pattern);
+    assert.ok(t.cnsByDay[1] > record.blocks.reduce((s, b) => s + blockCns(b.lines, model), 0), pattern);
     assert.deepEqual(t.byGear, bands[pattern].byGear, pattern);
     for (const k of ['aerobic', 'threshold', 'vo2']) assert.equal(Math.round(t.share[k] * 100), bands[pattern][k], `${pattern} ${k}`);
     assert.equal(t.distance, 2400, 'yards as written');
   }
 });
 
-test('the weekend before counts with the same CNS, and the app can pass its own count', () => {
+test('the weekend before counts with the same CNS', () => {
   const ctx = appCtx();
   const model = ctx.learned.writing.model;
   const { record: sat, composed } = circuitRecord(ctx, '2026-10-24', 'build');
   const w = weekOf({ plan, date: '2026-10-26', today: '2026-10-26', log: [sat] });
-  const shown = practiceMetrics(composed, ctx, 'AM').cns;
+  const shown = practiceMetrics(composed, ctx).cns;
   const t = weekTotals(w, plan, model);
   assert.equal(t.cnsMorning[0], Math.round(shown / 16 * 10) / 10); // 48 h later, half-life 12 h
-  // Injected per-practice points (as weekCns passes recordCns) replace the count.
-  const fixed = weekTotals(weekOf({ plan, date: '2026-10-26', today: '2026-10-26', log: [{ ...sat, date: '2026-10-27' }] }), plan, model, { cns: () => 10 });
-  assert.equal(fixed.cnsByDay[1], 10);
-  assert.equal(fixed.cnsMorning[2], 2.5); // a day later: a quarter left
-  assert.deepEqual(fixed.byGear, { G2: 800, G3: 800, G4: 800 }, 'gear bands still from the rounds');
+  // The same practice on Tuesday: its points that day, a quarter left a day later.
+  const tue = weekTotals(weekOf({ plan, date: '2026-10-26', today: '2026-10-26', log: [{ ...sat, date: '2026-10-27' }] }), plan, model);
+  assert.equal(tue.cnsByDay[1], shown);
+  assert.ok(Math.abs(tue.cnsMorning[2] - shown / 4) <= 0.06, `${tue.cnsMorning[2]} vs ${shown / 4}`);
+  assert.deepEqual(tue.byGear, { G2: 800, G3: 800, G4: 800 }, 'gear bands from the rounds');
 });
 
 test('a practice of blocks without set lines is not free (starter blocks)', () => {
@@ -222,6 +221,33 @@ test('a practice of blocks without set lines is not free (starter blocks)', () =
   const t = weekTotals(weekOf({ plan, date: '2026-10-26', today: '2026-10-26', log: [record] }), plan, ctx.learned.writing.model);
   assert.deepEqual(t.byGear, { G1: 1800 + 500, G3: 1600, G6: 400 }); // 30 min + 8 min ≈ 500y of G1 at 1:40/100
   assert.ok(t.cnsByDay[2] > 0);
-  assert.equal(t.cnsByDay[2], practiceMetrics(composed, ctx, 'AM').cns);
+  assert.equal(t.cnsByDay[2], practiceMetrics(composed, ctx).cns);
   assert.equal(t.cnsByDay[2], recordCns(record, ctx));
+});
+
+// ------------------------------------------------- one count per practice, kept
+
+import { makeGearModel } from '../src/gears.js';
+import { cnsTimeline, slotHour } from '../src/week.js';
+
+test('a practice\'s count is kept until the planning pace or the gear model changes', () => {
+  // Made-up: a 30 min warm-up with no lines or yards, so its yards come from the pace.
+  const r = { id: 'made-up', date: '2026-10-27', slot: 'AM', minutes: 30, distance: 1800, blocks: [{ id: 'w', name: 'Made-up warm-up', category: 'warmup', minutes: 30 }] };
+  const p = { ...plan, pace: 100 };
+  const model = makeGearModel({ cns: { G1: 0.01 } });
+  const first = recordLoad(r, p, model);
+  assert.deepEqual(first, { byGear: { G1: 1800 }, kick: 0, distance: 1800, cns: 18 });
+  assert.equal(recordLoad(r, p, model).byGear, first.byGear, 'kept for the same record');
+  assert.ok(Object.isFrozen(first.byGear));
+  assert.equal(recordLoad(r, p, makeGearModel({ cns: { G1: 0.02 } })).cns, 36, 'a new gear model counts the points again');
+  p.pace = 120; // the coach's planning pace changed: 30 min is fewer yards now
+  assert.deepEqual(recordLoad(r, p, model).byGear, { G1: 1500 });
+});
+
+test('practices on the CNS timeline: hours from the origin day, slot hour, in time order', () => {
+  assert.deepEqual([slotHour('AM'), slotHour('PM'), slotHour(undefined)], [6, 16, 6]);
+  const am = rec('2026-10-28', 'AM', [{ name: 'Fast', category: 'race', distance: 400, lines: ['8 x 50 free G5   1:00'] }]);
+  const pm = rec('2026-10-27', 'PM', [{ name: 'Easy', category: 'aerobic', distance: 1000 }]);
+  const t = cnsTimeline([am, pm], '2026-10-26', plan, plan.gears || {});
+  assert.deepEqual(t.map((x) => [x.record.id, x.at, x.points]), [[pm.id, 40, 0], [am.id, 54, 20]]);
 });

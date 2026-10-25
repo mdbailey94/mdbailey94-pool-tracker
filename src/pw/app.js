@@ -2,7 +2,7 @@
 // shared context every view renders with. Views live in ./views/*.js and
 // export render(ctx).
 
-import { todayISO, uid } from '../practice.js';
+import { byDateDesc, todayISO, uid } from '../practice.js';
 import { blockScores, intervalCalibration, withTiming } from '../learn.js';
 import { learnStyle, writingContext } from '../setlang.js';
 import { canon, journaling, loadAll, localBackend, openStore, replayJournal } from '../practice-store.js';
@@ -81,7 +81,7 @@ const save = {
   },
   async removeLog(id) { state.log = state.log.filter((r) => r.id !== id); return store.remove('log', id); },
   async debrief(d) {
-    state.debriefs = [d, ...state.debriefs.filter((x) => x.id !== d.id)].sort((a, b) => (a.date < b.date ? 1 : -1));
+    state.debriefs = [d, ...state.debriefs.filter((x) => x.id !== d.id)].sort(byDateDesc);
     return store.put('debriefs', d.id, d);
   },
   async removeDebrief(id) { state.debriefs = state.debriefs.filter((d) => d.id !== id); return store.remove('debriefs', id); },

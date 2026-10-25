@@ -5,7 +5,10 @@
 // writes the blocks out one after another or blended into a multi-round
 // circuit whose rounds can differ. Pure functions, no DOM.
 
-import { linesGearYards, parseSet, setDistance, setSeconds } from './setlang.js';
+import { gearIndex, shiftGear } from './gears.js';
+import { STROKE_ABBR, linesYards, parseSet, setDistance, setSeconds } from './setlang.js';
+
+export { shiftGear };
 
 // ------------------------------------------------------------ vocabulary
 
@@ -21,8 +24,36 @@ export const CATEGORIES = {
   cooldown: { label: 'Cool-down', main: false, pace: 1.0, circuit: false },
 };
 
+// Where a block came from: its label in the library, whether it is the
+// coach's own writing (their style is learned from it), and whether its
+// send-offs are the app's, written again from the gear chart each time it
+// prints. Blocks from the coach chat are Claude's, not the coach's style.
+export const SOURCES = {
+  coach: { label: 'yours', own: true, retime: false },
+  pasted: { label: 'pasted', own: true, retime: false },
+  drive: { label: 'imported', own: true, retime: false },
+  claude: { label: 'from the coach chat', own: false, retime: false },
+  generated: { label: 'written by the app', own: false, retime: true },
+};
+const sourceOf = (b) => (Object.hasOwn(SOURCES, b?.source ?? '') ? SOURCES[b.source] : null);
+export const isOwn = (b) => !!sourceOf(b)?.own;
+// A block of a saved practice (`printed`, recordBlock) keeps the send-offs
+// printed that day.
+export const retimes = (b) => !!sourceOf(b)?.retime && !b.printed;
+
+// What the block writer (generateBlock) writes for a block of a category:
+// pull as aerobic work, an IM race-pace block as the IM gears set, every
+// other category as itself.
+export function writeFocus(category, stroke) {
+  if (category === 'race' && stroke === 'IM') return 'im';
+  if (category === 'pull') return 'aerobic';
+  return CATEGORIES[category] ? category : 'aerobic';
+}
+
 export const STROKES = ['choice', 'free', 'back', 'breast', 'fly', 'IM'];
 export const STROKE_LABEL = { choice: 'choice', free: 'free', back: 'back', breast: 'breast', fly: 'FL', IM: 'IM' };
+// Strokes as written on a set line ("6 x 50 FL"): setlang's table.
+export { STROKE_ABBR };
 export const EQUIPMENT = ['fins', 'paddles', 'snorkel', 'socks', 'buoy', 'parachute', 'board', 'tempo trainer'];
 export const INTENSITY = { 1: 'easy', 2: 'moderate', 3: 'strong', 4: 'hard', 5: 'max' };
 
@@ -38,10 +69,13 @@ export const FOCUSES = {
   rest: { label: 'Rest', gears: [], weights: {}, circuit: false },
 };
 
+export const focusLabel = (f) => FOCUSES[f]?.label || f || '';
+// The gears a focus lives in: "G1 · G2" (or joined by `sep`).
+export const gearsText = (focus, sep = ' · ') => (FOCUSES[focus]?.gears || []).join(sep);
+
 // The gear a block mostly lives in when it doesn't say (for totals by gear).
 export const CATEGORY_GEAR = { warmup: 'G1', aerobic: 'G2', threshold: 'G3', race: 'G4', speed: 'G6', kick: 'G2', pull: 'G2', technique: 'G1', cooldown: 'G1' };
-export const SLOTS = ['AM', 'PM'];
-const GEAR_RE = /^G\d(\.\d)?$/;
+const SLOTS = ['AM', 'PM'];
 
 // When tired, swap the planned focus for something that still fits the week.
 const EASIER = { threshold: 'aerobic', race: 'technique', speed: 'technique', aerobic: 'recovery', technique: 'recovery', recovery: 'recovery', rest: 'rest' };
@@ -65,8 +99,8 @@ export function makeBlock(b) {
     intensity: Math.min(5, Math.max(1, Math.round(+b.intensity) || 2)),
     equipment: (b.equipment || []).filter((e) => EQUIPMENT.includes(e)),
     detail: String(b.detail || '').trim(),
-    gears: [...new Set((b.gears || []).map((g) => String(g).toUpperCase()).filter((g) => GEAR_RE.test(g)))],
-    session: ['AM', 'PM'].includes(b.session) ? b.session : 'any',
+    gears: [...new Set((b.gears || []).map((g) => String(g).toUpperCase()).filter((g) => gearIndex(g) != null))],
+    session: SLOTS.includes(b.session) ? b.session : 'any',
     lines: (Array.isArray(b.lines) ? b.lines : String(b.lines || '').split('\n')).map((l) => String(l).replace(/\s+$/, '')).filter((l, i, a) => l.trim() || (i > 0 && i < a.length - 1)),
     source: String(b.source || ''),
   };
@@ -77,11 +111,11 @@ export function makeBlock(b) {
 
 // Seconds per 100 for this block, including rest: the swimmer's planning pace
 // scaled by how much rest the category carries.
-export function blockPace(block, pace) {
+function blockPace(block, pace) {
   return pace * (CATEGORIES[block.category]?.pace ?? 1);
 }
 
-export const roundTo = (v, step) => Math.round(v / step) * step;
+const roundTo = (v, step) => Math.round(v / step) * step;
 
 // A block's own set lines, parsed, when they hold any swim yards (else null).
 function linesSet(block) {
@@ -116,7 +150,7 @@ export function measureText(block, unit) {
 
 // Short line for a block as it appears in a written practice.
 export function blockLine(block, unit, measure = null) {
-  const m = measure ? (measure.minutes ? `${measure.minutes} min` : `${measure.distance}${unit}`) : measureText(block, unit);
+  const m = measureText(measure || block, unit);
   const name = block.name.replace(/^\s*\d+(\s*(min|y|yd|m|yards|metres|meters))?\s*/i, '').trim() || block.name;
   return `${m} ${name}`;
 }
@@ -178,7 +212,7 @@ export function makePhase(p) {
 
 // Minutes in the water per weekday (Mon..Sun): 2 hours every morning but
 // Sunday, doubles (PM) on Tuesday and Thursday.
-export const DEFAULT_WEEK = [
+const DEFAULT_WEEK = [
   { am: 120, pm: 0 }, { am: 120, pm: 60 }, { am: 120, pm: 0 }, { am: 120, pm: 60 },
   { am: 120, pm: 0 }, { am: 120, pm: 0 }, { am: 0, pm: 0 },
 ];
@@ -285,10 +319,11 @@ export function planPosition(plan, date) {
 }
 
 // The meet on a date, if any (inclusive of both ends).
-export const meetOn = (plan, date) => (plan.meets || []).find((m) => m.start <= date && date <= m.end) || null;
+const meetOn = (plan, date) => (plan.meets || []).find((m) => m.start <= date && date <= m.end) || null;
 
+// The first meet not over by `date` (plan.meets are kept in start order).
 export function nextMeet(plan, date) {
-  return (plan.meets || []).filter((m) => m.end >= date).sort((a, b) => (a.start < b.start ? -1 : 1))[0] || null;
+  return (plan.meets || []).find((m) => m.end >= date) || null;
 }
 
 // The sessions on a date: AM (and PM on double days) with their focus and
@@ -545,48 +580,62 @@ export function composePractice({ blocks, rounds = 1, pattern = 'even', pace = 1
 // scale, or all of them when that is within 1%.
 export const shareScale = (share) => (share?.scale && Math.abs(share.scale - 1) > 0.01 ? share.scale : 1);
 
-// Yards per gear of a composed practice, as the builder counts its CNS load:
-// each block's lines (in a circuit, each round's share of them with the
-// round's gear shift and scaled reps), or for a block without swim lines its
-// distance (its round's share of it) in its first gear, else its category's,
-// shifted with the round as its lines would be.
-export function composedGearYards(composed) {
-  const out = {};
-  const add = (g, y) => { if (y > 0) out[g] = (out[g] || 0) + y; };
+// Yards per gear and kick yards of a composed practice, as the builder counts
+// its CNS load: each block's lines (in a circuit, each round's share of them
+// with the round's gear shift and scaled reps), or for a block without swim
+// lines its distance (its round's share of it) in its first gear, else its
+// category's, shifted with the round as its lines would be (all kick for a
+// kick block). → { byGear, kick }
+export function composedYards(composed) {
+  const byGear = {};
+  let kick = 0;
+  const add = (g, y) => { if (y > 0) byGear[g] = (byGear[g] || 0) + y; };
   const part = (block, distance, share = null) => {
     const shift = share?.gearShift || 0;
     if (linesSet(block)) {
-      for (const [g, y] of Object.entries(linesGearYards(block.lines, { gearShift: shift, scale: shareScale(share) }))) add(g, y);
+      const y = linesYards(block.lines, { gearShift: shift, scale: shareScale(share) });
+      for (const [g, v] of Object.entries(y.byGear)) add(g, v);
+      kick += y.kick;
     } else if (distance > 0) {
       add(shiftGear(block.gears?.[0] || CATEGORY_GEAR[block.category] || 'G2', shift), Math.round(distance));
+      if (block.category === 'kick') kick += Math.round(distance);
     }
   };
   for (const s2 of composed.sections) {
     if (s2.type === 'block') part(s2.block, s2.distance);
     else s2.items.forEach((it) => it.shares.forEach((sh) => part(it.block, sh.distance ?? it.distance * (sh.scale ?? 1), sh)));
   }
-  return out;
+  return { byGear, kick: Math.round(kick) };
+}
+
+// Yards per gear of a composed practice (composedYards).
+export const composedGearYards = (composed) => composedYards(composed).byGear;
+
+// A saved practice's block as a block again (makeBlock), with what its
+// record keeps: the sizes it was saved with (records keep both, a v1 record
+// neither), in the block's own measure (`measure`; a record saved before it
+// reads as timed), whether it was in the circuit, and `printed`: its lines
+// are the ones printed that day, so their send-offs are never re-timed.
+export function recordBlock(rb) {
+  return { ...makeBlock(rb), minutes: rb.measure === 'distance' ? null : rb.minutes, distance: rb.distance, circuit: !!rb.circuit, printed: true };
 }
 
 // A saved practice composed again as the builder composed it (rounds, round
-// pattern, each block's share of the rounds). A block measured in yards
-// shares out its yards, a timed one its minutes (records keep both sizes;
-// `measure` says which was the block's).
+// pattern, each block's share of the rounds): a block measured in yards
+// shares out its yards, a timed one its minutes.
 export function recordComposed(record, plan = {}) {
-  const blocks = (record.blocks || []).map((b) => (b.measure === 'distance' ? { ...b, minutes: null } : b));
-  return composePractice({ blocks, rounds: record.rounds || 1, pattern: record.pattern || 'even', pace: plan.pace || 100, unit: record.unit || plan.unit || 'y' });
+  return composePractice({ blocks: (record.blocks || []).map(recordBlock), rounds: record.rounds || 1, pattern: record.pattern || 'even', pace: plan.pace || 100, unit: record.unit || plan.unit || 'y' });
 }
 
-export const fmtDistance = (d, unit) => `${Math.round(d).toLocaleString('en-US')}${unit}`;
-
-const shareText = (share, unit) => (share.minutes ? `${share.minutes} min` : `${share.distance}${unit}`);
+const NUMBER = new Intl.NumberFormat('en-US');
+export const fmtDistance = (d, unit) => `${NUMBER.format(Math.round(d))}${unit}`;
 
 // Per-round text for a circuit item: "175y socks with FL",
 // "175y socks with FL (last round 150y)", "300 / 200 / 100y socks with FL",
 // "200y kick (G2 → G3 → G4 by round)".
 export function shareLine(item, unit) {
   const first = item.shares[0];
-  const texts = item.shares.map((s2) => shareText(s2, unit));
+  const texts = item.shares.map((s2) => measureText(s2, unit));
   const same = texts.every((t) => t === texts[0]);
   let line = blockLine(item.block, unit, first);
   if (!same) {
@@ -596,7 +645,7 @@ export function shareLine(item, unit) {
     if (lastOnly) line = `${line} (last round ${diff[0].t})`;
     else if (monotonic) {
       const vals = item.shares.map((s2) => s2.minutes ?? s2.distance);
-      line = blockLine(item.block, unit, first).replace(shareText(first, unit), `${vals.join(' / ')}${first.minutes ? ' min' : unit}`);
+      line = blockLine(item.block, unit, first).replace(measureText(first, unit), `${vals.join(' / ')}${first.minutes ? ' min' : unit}`);
     } else line = `${line} (rounds: ${texts.join(', ')})`;
   }
   const shifts = item.shares.map((s2) => s2.gearShift || 0);
@@ -607,13 +656,6 @@ export function shareLine(item, unit) {
     else line += ` (gears: ${shifts.map((g) => `+${g}`).join(', ')})`;
   }
   return line;
-}
-
-// 'G2' shifted by 2 → 'G4' (capped at G6, floored at G1).
-export function shiftGear(gear, by) {
-  const m = /^G(\d)(\.\d)?$/.exec(gear || '');
-  if (!m || !by) return gear;
-  return `G${Math.min(6, Math.max(1, +m[1] + by))}${m[2] || ''}`;
 }
 
 // Plain text of a practice, for copying or printing. `renderLines(block,
@@ -646,12 +688,18 @@ export function practiceText(composed, { title = '', date = '', focus = '', phas
   return out.join('\n');
 }
 
-export function longDate(iso) {
-  return parseISO(iso).toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' });
-}
+const LONG_DATE = new Intl.DateTimeFormat(undefined, { weekday: 'long', month: 'short', day: 'numeric' });
+const SHORT_DATE = new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' });
+
+// "Tuesday, Oct 27" (in the device's language).
+export const longDate = (iso) => LONG_DATE.format(parseISO(iso));
+
+// "Tue Oct 27".
+export const dayLabel = (iso) => `${WEEKDAYS[weekdayIndex(iso)]} ${SHORT_DATE.format(parseISO(iso))}`;
 
 // Record for the log (what the suggestion engine reads back for variety, and
-// what a debrief walks through section by section).
+// what a debrief walks through section by section). Each block keeps both
+// its sizes in the practice and `measure`, the one that was its own.
 export function practiceRecord({ date, title, focus, slot = 'AM', position, blocks, rounds, pattern = 'even', composed, text }) {
   const sizes = new Map();
   composed.sections.forEach((s2) => {
@@ -674,6 +722,7 @@ export function practiceRecord({ date, title, focus, slot = 'AM', position, bloc
       gears: b.gears || [], lines: b.lines || [], source: b.source || '',
       detail: b.detail || '', equipment: b.equipment || [],
       minutes: sizes.get(b)?.minutes ?? null, distance: sizes.get(b)?.distance ?? null,
+      measure: b.minutes ? 'time' : 'distance',
     })),
     minutes: composed.minutes,
     distance: composed.distance,
@@ -692,17 +741,33 @@ export function logSummary(history, date, days = 7) {
   };
 }
 
-// Distance by gear over the last `days` days (each block counted in its
-// first gear, or its category's usual gear).
-export function gearTotals(history, date, days = 7) {
-  const out = {};
-  for (const h of history) {
-    const a = daysBetween(h.date, date);
-    if (a < 0 || a >= days) continue;
-    for (const b of h.blocks || []) {
-      const g = (b.gears && b.gears[0]) || CATEGORY_GEAR[b.category] || 'G2';
-      out[g] = (out[g] || 0) + (b.distance || 0);
-    }
-  }
-  return out;
+// Newest first: by date, then the one saved last (the order the app keeps
+// the log and the debriefs in).
+export const byDateDesc = (a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : (b.createdAt || 0) - (a.createdAt || 0));
+
+// What a saved practice is called: its title, else its main blocks (up to
+// three), else its focus.
+export function recordTitle(r) {
+  if (r?.title) return r.title;
+  const main = (r?.blocks || []).filter((b) => CATEGORIES[b.category]?.main !== false).map((b) => b.name).filter(Boolean);
+  if (main.length) return main.slice(0, 3).join(', ') + (main.length > 3 ? '…' : '');
+  return focusLabel(r?.focus) || 'Practice';
+}
+
+// Where a date falls in the season (planPosition), in words, as each screen
+// says it. `detail`: 'phase' (Today) "Base · week 2 of 6"; 'season' (the
+// Season tab) "Now: Base · week 2 of 6 · season week 8"; 'context' (what the
+// coach chat is told) "Base · week 2 of 6 · season week 8 of 20"; 'week'
+// (the Week) that and the phase's volume.
+export function positionText(pos, { detail = 'phase' } = {}) {
+  if (!pos) return '';
+  const days = (n) => `${n} day${n === 1 ? '' : 's'}`;
+  if (pos.status === 'before') return detail === 'week' ? `Before the season · it starts in ${days(pos.daysToStart)}` : `Season starts in ${days(pos.daysToStart)}`;
+  if (pos.status === 'after') return detail === 'week' ? 'After the season · off-season' : detail === 'context' ? 'Season finished (off-season)' : 'Season finished · off-season';
+  if (pos.status === 'empty') return detail === 'context' ? 'No phases in the plan' : 'No phases in the plan yet';
+  const phase = `${pos.phase.name} · week ${pos.phaseWeek + 1} of ${pos.phase.weeks}`;
+  if (detail === 'season') return `Now: ${phase} · season week ${pos.week + 1}`;
+  if (detail === 'context') return `${phase} · season week ${pos.week + 1} of ${pos.total}`;
+  if (detail === 'week') return `${phase} · season week ${pos.week + 1} of ${pos.total} · volume ${Math.round((pos.phase.volume || 0) * 100)}%`;
+  return phase;
 }

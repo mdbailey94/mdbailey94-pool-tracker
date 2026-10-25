@@ -11,7 +11,7 @@ import {
 } from '../../practice.js';
 import { BANDS, draftWeek, weekGaps, weekOf, weekTotals } from '../../week.js';
 import { focusLabel, practiceHTML, practiceTextFor } from '../render.js';
-import { draftBlock, savedRecord, weekCns } from '../load.js';
+import { draftBlock, savedRecord } from '../load.js';
 import { openDebrief, replaceDraft } from '../guards.js';
 import { updateDebriefDot } from '../app.js';
 import { bindDocCard, docCardHTML, inDoc, weekDocFor } from '../doc-card.js';
@@ -67,8 +67,8 @@ export function render(ctx, el) {
   const ui = (state.ui.wk ||= { view: null, drafts: null, past: false });
   if (ui.drafts && ui.drafts.monday !== monday) ui.drafts = null;
   const week = weekOf({ plan: state.plan, date: monday, today: state.today, log: state.log, debriefs: state.debriefs });
-  // CNS by day counted as the builder and Today count it (load.js).
-  const totals = { ...weekTotals(week, state.plan, ctx.learned.writing.model), ...weekCns(week, ctx) };
+  // CNS by day counted as the builder and Today count it (recordLoad).
+  const totals = weekTotals(week, state.plan, ctx.learned.writing.model);
   const gaps = weekGaps(totals);
   const viewing = ui.view ? findSession(week, ui.view) : null;
   if (ui.view && !viewing) ui.view = null;

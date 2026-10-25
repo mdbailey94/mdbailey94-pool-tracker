@@ -4,8 +4,8 @@
 // Claude's JSON reply back into blocks and practices. Pure functions, no DOM.
 
 import {
-  CATEGORIES, EQUIPMENT, FOCUSES, PATTERNS, STROKES, WEEKDAYS, daysBetween, longDate, makeBlock,
-  sessionsOn,
+  CATEGORIES, EQUIPMENT, FOCUSES, PATTERNS, STROKES, WEEKDAYS, byDateDesc, daysBetween, fmtDistance, focusLabel, gearsText, isOwn,
+  longDate, makeBlock, measureText, positionText, recordTitle, sessionsOn,
 } from './practice.js';
 import { fmtClock, makeGearModel } from './gears.js';
 import { carryForward, debriefSummary } from './learn.js';
@@ -13,7 +13,7 @@ import { parseLine, parseSet, quickBlock, setGears } from './setlang.js';
 import { BANDS, weekGaps, weekOf, weekTotals } from './week.js';
 
 export const CONTEXT_MAX = 20000; // bytes of context text
-export const TURNS_MAX = 120000; // characters across all turns
+const TURNS_MAX = 120000; // characters across all turns
 
 // ------------------------------------------------------------------ rules
 
@@ -56,45 +56,31 @@ const clip = (s, n) => {
   const t = String(s ?? '').trim();
   return t.length > n ? `${t.slice(0, Math.max(0, n - 1)).trimEnd()}…` : t;
 };
-const focusName = (f) => FOCUSES[f]?.label || f || '';
-const gearsOf = (f) => (FOCUSES[f]?.gears || []).join(', ');
-
-function positionLine(pos) {
-  if (!pos) return '';
-  if (pos.status === 'before') return `Season starts in ${pos.daysToStart} day${pos.daysToStart === 1 ? '' : 's'}`;
-  if (pos.status === 'after') return 'Season finished (off-season)';
-  if (pos.status === 'empty') return 'No phases in the plan';
-  return `${pos.phase.name} · week ${pos.phaseWeek + 1} of ${pos.phase.weeks} · season week ${pos.week + 1} of ${pos.total}`;
-}
-
 function sessionText(s) {
-  return `${s.slot} ${s.minutes} min · ${focusName(s.focus)}${gearsOf(s.focus) ? ` (gears ${gearsOf(s.focus)})` : ''}${s.theme ? ` · theme: ${s.theme}` : ''}${s.note ? ` · ${s.note}` : ''}`;
+  const gears = gearsText(s.focus, ', ');
+  return `${s.slot} ${s.minutes} min · ${focusLabel(s.focus)}${gears ? ` (gears ${gears})` : ''}${s.theme ? ` · theme: ${s.theme}` : ''}${s.note ? ` · ${s.note}` : ''}`;
 }
-
-const fmtYards = (d, unit) => `${Math.round(d || 0).toLocaleString('en-US')}${unit}`;
 
 // One session of the week with where it stands: "AM 120 Aerobic [written:
 // "Tuesday kick", 6,200y]", "PM 60 Technique [open]".
 function weekSessionText(s, unit) {
-  const head = s.extra ? `${s.slot} extra (not in the plan)` : `${s.slot} ${s.minutes} ${focusName(s.focus)}${s.theme ? ` (${s.theme})` : ''}${s.note ? ` (${s.note})` : ''}`;
+  const head = s.extra ? `${s.slot} extra (not in the plan)` : `${s.slot} ${s.minutes} ${focusLabel(s.focus)}${s.theme ? ` (${s.theme})` : ''}${s.note ? ` (${s.note})` : ''}`;
   const r = s.record;
   if (!r) return `${head} [${s.status}]`;
-  const title = r.title || (r.blocks || []).filter((b) => !['warmup', 'cooldown'].includes(b.category)).map((b) => b.name).slice(0, 3).join(', ') || focusName(r.focus);
-  return `${head} [${s.status}: "${clip(title, 60)}", ${fmtYards(r.distance, r.unit || unit)}, ${r.minutes} min]`;
+  return `${head} [${s.status}: "${clip(recordTitle(r), 60)}", ${fmtDistance(r.distance || 0, r.unit || unit)}, ${r.minutes} min]`;
 }
 
 // The week of `date`: every day's sessions with their status (open,
 // written, swum, debriefed) and what is written, the totals against the
 // phase's targets and where the week is off them. Gear bands and CNS points
-// are counted as Build, Today and the Week count them (weekTotals; `cns`,
-// when given, counts each practice's points: the app's recordCns).
-function weekLines(state, learned, date, cns = null) {
+// are counted as Build, Today and the Week count them (weekTotals).
+function weekLines(state, learned, date) {
   const plan = state.plan;
   const unit = plan.unit || 'y';
   const today = state.today || date;
   const week = weekOf({ plan, date, today, log: state.log || [], debriefs: state.debriefs || [] });
   const model = learned.writing?.model || plan.gears || {};
-  const t = weekTotals(week, plan, model, { cns });
+  const t = weekTotals(week, plan, model);
   const lines = week.days.map((day, i) => {
     const what = [
       day.meet ? `meet: ${day.meet.name}` : '',
@@ -104,7 +90,7 @@ function weekLines(state, learned, date, cns = null) {
     return `${WEEKDAYS[i]} ${day.date.slice(5)}: ${what}${marks ? `  ${marks}` : ''}`;
   });
   const tg = t.targets;
-  lines.push(`Written: ${t.written} of ${t.planned} planned sessions${t.extras ? ` + ${t.extras} extra` : ''}, ${fmtYards(t.distance, unit)}, ${t.minutes} min${t.targetYards ? `; target about ${fmtYards(t.targetYards, unit)} for the week (${week.phase?.name || 'phase'} at ${Math.round((week.phase?.volume ?? 1) * 100)}% volume)` : ''}.`);
+  lines.push(`Written: ${t.written} of ${t.planned} planned sessions${t.extras ? ` + ${t.extras} extra` : ''}, ${fmtDistance(t.distance, unit)}, ${t.minutes} min${t.targetYards ? `; target about ${fmtDistance(t.targetYards, unit)} for the week (${week.phase?.name || 'phase'} at ${Math.round((week.phase?.volume ?? 1) * 100)}% volume)` : ''}.`);
   const bandText = (share) => BANDS.map((b) => `${b.label} ${Math.round((share[b.key] || 0) * 100)}%`).join(', ');
   if (t.distance) {
     lines.push(`Gear bands of the written yards: ${bandText(t.share)}; kick ${Math.round(t.kickShare * 100)}%. Targets: ${bandText(tg)}; kick ${Math.round(tg.kick * 100)}%.`);
@@ -141,7 +127,7 @@ export function relevantBlocks(blocks, { focuses = [], slot = null, weights = {}
       s = Math.max(s, v);
     }
     if (b.lines?.length) s *= 1.6;
-    if (['coach', 'pasted', 'drive', 'claude'].includes(b.source)) s *= 1.3;
+    if (isOwn(b)) s *= 1.3;
     if (slot && b.session === slot) s *= 1.25;
     else if (slot && b.session && b.session !== 'any') s *= 0.4;
     s *= Number.isFinite(weights[b.id]) ? weights[b.id] : 1;
@@ -151,8 +137,7 @@ export function relevantBlocks(blocks, { focuses = [], slot = null, weights = {}
 }
 
 function blockText(b, unit, maxLines) {
-  const measure = b.minutes ? `${b.minutes} min` : `${b.distance}${unit}`;
-  const meta = [measure, b.category, b.stroke !== 'choice' ? b.stroke : '', b.gears?.length ? b.gears.join(' ') : '', b.session && b.session !== 'any' ? b.session : '', b.equipment?.length ? `kit: ${b.equipment.join(', ')}` : ''].filter(Boolean).join(' · ');
+  const meta = [measureText(b, unit), b.category, b.stroke !== 'choice' ? b.stroke : '', b.gears?.length ? b.gears.join(' ') : '', b.session && b.session !== 'any' ? b.session : '', b.equipment?.length ? `kit: ${b.equipment.join(', ')}` : ''].filter(Boolean).join(' · ');
   const lines = (b.lines || []).slice(0, maxLines);
   const more = (b.lines || []).length - lines.length;
   const desc = b.detail ? [`(${lines.length ? 'description' : 'no lines; description'}: ${clip(b.detail, 200)})`] : [];
@@ -160,7 +145,7 @@ function blockText(b, unit, maxLines) {
 }
 
 function recordText(r, n) {
-  const head = `### ${r.date} ${r.slot || 'AM'}${r.focus ? ` · ${focusName(r.focus)}` : ''}${r.title ? ` · ${r.title}` : ''}`;
+  const head = `### ${r.date} ${r.slot || 'AM'}${r.focus ? ` · ${focusLabel(r.focus)}` : ''}${r.title ? ` · ${r.title}` : ''}`;
   const body = r.text || (r.blocks || []).map((b) => [b.name, ...(b.lines || []).map((l) => `    ${l}`)].join('\n')).join('\n');
   return `${head}\n${clip(body, n)}`;
 }
@@ -178,28 +163,34 @@ const LADDER = [
 //   learned   { weights, calibration, writing } from the app shell
 //   date      the day asked about (default state.today)
 //   slot      'AM' | 'PM' | null: the session asked about
-//   cns       optional (record) => CNS points of a saved practice (the app's
-//             recordCns); by default the week counts them as the builder
-//             does from state.plan and learned.writing.model
-export function coachContext({ state, learned = {}, date = null, slot = null, cns = null } = {}) {
+// The week counts each practice as the builder does, from state.plan and
+// learned.writing.model.
+export function coachContext({ state, learned = {}, date = null, slot = null } = {}) {
+  const parts = contextParts(state, learned, date || state.today, slot);
   for (const limits of LADDER) {
-    const text = buildContext(state, learned, date || state.today, slot, limits, cns);
+    const text = buildContext(parts, limits);
     if (bytes(text) <= CONTEXT_MAX) return text;
   }
-  let text = buildContext(state, learned, date || state.today, slot, LADDER.at(-1), cns);
+  let text = buildContext(parts, LADDER.at(-1));
   while (bytes(text) > CONTEXT_MAX) text = text.slice(0, Math.floor(text.length * 0.9));
   return `${text}\n(cut short)`;
 }
 
-function buildContext(state, learned, date, slot, lim, cns = null) {
+// "TITLE\nline\nline", or nothing without lines.
+const section = (title, lines) => (lines.length ? [`${title}\n${lines.join('\n')}`] : []);
+
+// What the context says however much of it fits: the day, the week, meets,
+// gear chart and groups, and the library, practices and debriefs in the order
+// they are cut to.
+function contextParts(state, learned, date, slot) {
   const plan = state.plan;
   const unit = plan.unit || 'y';
   const day = sessionsOn(plan, date);
-  const out = [];
-  const push = (title, lines) => { if (lines.length) out.push(`${title}\n${lines.join('\n')}`); };
+  const head = [];
+  const push = (title, lines) => head.push(...section(title, lines));
 
   // Today and the week around it.
-  const today = [`Date: ${longDate(date)} (${date})`, `Season: ${plan.name || 'Season'} · ${positionLine(day.position)}`];
+  const today = [`Date: ${longDate(date)} (${date})`, `Season: ${plan.name || 'Season'} · ${positionText(day.position, { detail: 'context' })}`];
   if (day.meet) today.push(`Meet today: ${day.meet.name}. No practice.`);
   else if (!day.sessions.length) today.push('No practice today (rest day).');
   else today.push(...day.sessions.map((s) => `Session: ${sessionText(s)}`));
@@ -208,14 +199,15 @@ function buildContext(state, learned, date, slot, lim, cns = null) {
   if (slot) today.push(`Asked about: the ${slot} session${day.sessions.some((s) => s.slot === slot) ? '' : ' (not in the plan that day)'}.`);
   push('TODAY', today);
 
-  push('THIS WEEK (each session: plan, then [status: what is written])', weekLines(state, learned, date, cns));
+  push('THIS WEEK (each session: plan, then [status: what is written])', weekLines(state, learned, date));
 
-  const meets = (plan.meets || []).filter((m) => m.end >= date && daysBetween(date, m.start) <= 21).sort((a, b) => (a.start < b.start ? -1 : 1));
+  // plan.meets are kept in start order.
+  const meets = (plan.meets || []).filter((m) => m.end >= date && daysBetween(date, m.start) <= 21);
   push('MEETS IN THE NEXT 21 DAYS', meets.length ? meets.map((m) => {
     const away = daysBetween(date, m.start);
     return `- ${m.name}: ${m.start}${m.end !== m.start ? ` to ${m.end}` : ''}${m.course ? ` (${m.course})` : ''}, ${away <= 0 ? 'on now' : `in ${away} day${away === 1 ? '' : 's'}`}${m.note ? ` · ${clip(m.note, 160)}` : ''}`;
   }) : ['none']);
-  out.push(`UNIT: ${unit === 'm' ? 'metres' : 'yards'}${plan.course ? ` (${plan.course})` : ''}`);
+  head.push(`UNIT: ${unit === 'm' ? 'metres' : 'yards'}${plan.course ? ` (${plan.course})` : ''}`);
 
   // Gear chart and groups.
   const model = learned.writing?.model || makeGearModel(plan.gears || {});
@@ -235,6 +227,27 @@ function buildContext(state, learned, date, slot, lim, cns = null) {
     return `${i + 1}. ${g.name}${g.key ? ` (column key ${g.key})` : ''}: ${['G2', 'G3', 'G4', 'G5', 'G6'].map(p).filter(Boolean).join(' · ')}${im}${g.assumed ? ' (assumed: no groups set up yet, one column for everyone)' : ''}`;
   }) : ['none set up']);
 
+  // The library most relevant first, the practices and debriefs newest first.
+  const focuses = slot ? day.sessions.filter((s) => s.slot === slot).map((s) => s.focus) : day.sessions.map((s) => s.focus);
+  const library = relevantBlocks(state.blocks || [], { focuses, slot, weights: learned.weights || {}, max: Infinity });
+  const recent = (state.log || []).filter((x) => x.date <= date).sort(byDateDesc);
+  const titles = new Map((state.log || []).map((x) => [x.id, x.title || focusLabel(x.focus)]));
+  const debriefs = [...(state.debriefs || [])].sort(byDateDesc).slice(0, 6)
+    .map((d) => `- ${d.date} ${d.slot || 'AM'}${titles.get(d.practiceId) ? ` (${titles.get(d.practiceId)})` : ''}: ${clip(debriefSummary(d), 700)}`);
+  const notes = new Map();
+  const notesOf = (b) => {
+    if (!notes.has(b)) notes.set(b, carryForward(state.debriefs || [], b.id, 2));
+    return notes.get(b);
+  };
+  return { state, unit, head, library, recent, debriefs, notesOf };
+}
+
+// The context with the library, practices and style guide cut to `lim`.
+function buildContext(parts, lim) {
+  const { state, unit } = parts;
+  const out = [...parts.head];
+  const push = (title, lines) => out.push(...section(title, lines));
+
   // Style.
   const st = state.style;
   const style = [];
@@ -247,18 +260,14 @@ function buildContext(state, learned, date, slot, lim, cns = null) {
   push('STYLE', style.length ? style : ['nothing learned yet']);
 
   // Library excerpt.
-  const focuses = slot ? day.sessions.filter((s) => s.slot === slot).map((s) => s.focus) : day.sessions.map((s) => s.focus);
-  const lib = relevantBlocks(state.blocks || [], { focuses, slot, weights: learned.weights || {}, max: lim.blocks });
+  const lib = parts.library.slice(0, lim.blocks);
   push(`LIBRARY (${lib.length} of ${(state.blocks || []).length} blocks, most relevant first)`, lib.map((b) => blockText(b, unit, lim.lines)));
 
   // Recent practices and debriefs.
-  const recent = [...(state.log || [])].filter((x) => x.date <= date).sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : (b.createdAt || 0) - (a.createdAt || 0))).slice(0, lim.practices);
-  push('RECENT PRACTICES (newest first)', recent.map((x) => recordText(x, lim.practiceChars)));
-  const titles = new Map((state.log || []).map((x) => [x.id, x.title || focusName(x.focus)]));
-  const debriefs = [...(state.debriefs || [])].sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : (b.createdAt || 0) - (a.createdAt || 0))).slice(0, 6);
-  push('DEBRIEFS (newest first)', debriefs.map((d) => `- ${d.date} ${d.slot || 'AM'}${titles.get(d.practiceId) ? ` (${titles.get(d.practiceId)})` : ''}: ${clip(debriefSummary(d), 700)}`));
+  push('RECENT PRACTICES (newest first)', parts.recent.slice(0, lim.practices).map((x) => recordText(x, lim.practiceChars)));
+  push('DEBRIEFS (newest first)', parts.debriefs);
   const carry = lib.flatMap((b) => {
-    const notes = carryForward(state.debriefs || [], b.id, 2);
+    const notes = parts.notesOf(b);
     return notes.length ? [`- ${b.name}: ${notes.map((n) => [n.date, n.verdict, n.why && `why: ${clip(n.why, 160)}`, n.changed && `changed: ${clip(n.changed, 160)}`, n.intervals && `intervals ${n.intervals}`, n.times && `times ${clip(n.times, 80)}`].filter(Boolean).join(', ')).join(' | ')}`] : [];
   });
   push('NOTES CARRIED FORWARD (from debriefs, per library block)', carry);
@@ -297,7 +306,7 @@ const num = (v) => {
 // One block from Claude, made safe: wrong types tolerated, categories
 // outside CATEGORIES become 'aerobic', a "36 min …" heading in the lines
 // becomes the name, gears and measure are read from the lines when missing.
-export function coachBlock(raw) {
+function coachBlock(raw) {
   if (typeof raw === 'string') raw = { lines: raw };
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
   let lines = (Array.isArray(raw.lines) ? raw.lines : str(raw.lines).split(/\r?\n/)).map((l) => str(l).replace(/\s+$/, ''));
@@ -404,9 +413,8 @@ export function offlineReply(message, wctx = null) {
   const words = parsed.lines.filter((l) => l.type === 'text').length;
   if (swims && words <= swims) {
     const block = makeBlock(quickBlock(text, wctx));
-    const measure = block.minutes ? `${block.minutes} min` : `${block.distance}${wctx?.unit || 'y'}`;
     return {
-      reply: `Saved as a block: ${block.name} (${measure} · ${CATEGORIES[block.category].label.toLowerCase()}${block.gears.length ? ` · ${block.gears.join(' ')}` : ''}).`,
+      reply: `Saved as a block: ${block.name} (${measureText(block, wctx?.unit || 'y')} · ${CATEGORIES[block.category].label.toLowerCase()}${block.gears.length ? ` · ${block.gears.join(' ')}` : ''}).`,
       practice: null,
       blocks: [block],
     };

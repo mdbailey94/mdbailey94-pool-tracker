@@ -5,10 +5,9 @@
 // Pure functions, no DOM.
 
 import {
-  addDays, CATEGORY_GEAR, composedGearYards, daysBetween, mondayOf, planPosition, recordComposed, sessionsOn, suggestPractice,
+  addDays, composedYards, daysBetween, mondayOf, planPosition, recordComposed, sessionsOn, suggestPractice,
 } from './practice.js';
 import { cnsPoints, cnsResidual, gearIndex } from './gears.js';
-import { gearYards, parseSet, setDistance } from './setlang.js';
 
 // Gear bands the season plan is written in.
 export const BANDS = [
@@ -29,52 +28,43 @@ export const DEFAULT_TARGETS = { aerobic: 0.75, threshold: 0.13, vo2: 0.06, race
 
 export const phaseTargets = (phase) => ({ ...DEFAULT_TARGETS, ...(phase?.targets || {}) });
 
-// Yards per gear for one saved practice as written: from its blocks' lines
-// when they have swim lines (the yards written; a circuit block's lines
-// cover all its rounds), else each block's distance in its first gear (or
-// its category's). `distance` counts the practice the same way (the record's
-// own total when a block has neither lines nor a size, as v1 records). The
-// week's gear bands and CNS use recordLoad instead, which also counts each
-// circuit round's gear shift.
-export function recordGearYards(record) {
-  const out = {};
-  let kick = 0;
-  let distance = 0;
-  let sized = true;
-  for (const b of record.blocks || []) {
-    const parsed = b.lines?.length ? parseSet(b.lines.join('\n')) : null;
-    const lineTotal = parsed ? setDistance(parsed) : 0;
-    if (lineTotal) {
-      for (const [g, v] of Object.entries(gearYards(parsed))) out[g] = (out[g] || 0) + v;
-      for (const l of parsed.lines) {
-        if (l.type === 'swim' && l.kind === 'kick') kick += l.reps * l.distance * roundsOf(parsed, l);
-      }
-      distance += lineTotal;
-    } else if (b.distance) {
-      const g = b.gears?.[0] || CATEGORY_GEAR[b.category] || 'G2';
-      out[g] = (out[g] || 0) + b.distance;
-      if (b.category === 'kick') kick += b.distance;
-      distance += b.distance;
-    } else sized = false;
+// The hour a session counts at in the CNS timeline: 6:00 (AM) or 16:00 (PM).
+export const slotHour = (slot) => (slot === 'PM' ? 16 : 6);
+
+// What each saved practice counts, by record: saved records are replaced on
+// every change, never changed in place. Yards depend on the planning pace
+// (sizes estimated from it), the CNS points on the gear model too.
+const loads = new WeakMap();
+
+// Yards per gear, kick yards, yards and CNS points of a saved practice as the
+// builder counted them when it was written: put back together from its
+// blocks, rounds and round pattern (recordComposed), each circuit round with
+// its share of the lines and its gear shift, a block without lines at its
+// distance in its first gear (composedYards). The yards follow the blocks'
+// lines, also for practices saved with a minutes estimate; a v1 record
+// (blocks without lines or sizes) keeps its own total. Build, Today, the
+// Week and the coach chat all count a practice this way.
+// → { byGear, kick, distance, cns } (shared: read only)
+export function recordLoad(record, plan, model = plan.gears || {}) {
+  const pace = plan.pace || 100;
+  let c = loads.get(record);
+  if (!c || c.pace !== pace) {
+    const composed = recordComposed(record, plan);
+    const { byGear, kick } = composedYards(composed);
+    c = { pace, byGear: Object.freeze(byGear), kick, distance: composed.distance > 0 ? composed.distance : record.distance || 0, model: null, cns: 0 };
+    loads.set(record, c);
   }
-  for (const k of Object.keys(out)) out[k] = Math.round(out[k]);
-  return { byGear: out, kick: Math.round(kick), distance: sized && distance ? distance : record.distance || 0 };
+  if (c.model !== model) Object.assign(c, { model, cns: cnsPoints(model, c.byGear) });
+  return { byGear: c.byGear, kick: c.kick, distance: c.distance, cns: c.cns };
 }
 
-function roundsOf(parsed, line) {
-  for (const it of parsed.structure) if (it.type === 'rounds' && it.items.includes(line)) return it.rounds;
-  return 1;
-}
-
-// Yards per gear and CNS points of a saved practice as the builder counted
-// them when it was written: put back together from its blocks, rounds and
-// round pattern, each circuit round with its share of the lines and its gear
-// shift, a block without lines at its distance in its first gear
-// (composedGearYards; the app's recordCns counts the same). `cns(record)`,
-// when given, counts the points instead.
-export function recordLoad(record, plan, model = plan.gears || {}, cns = null) {
-  const byGear = composedGearYards(recordComposed(record, plan));
-  return { byGear, cns: cns ? cns(record) : cnsPoints(model, byGear) };
+// Practices on a timeline of hours from 0:00 on `origin`, each at its slot's
+// hour with its CNS points, in time order: [{ record, at, points }], what
+// cnsResidual reads.
+export function cnsTimeline(records, origin, plan, model) {
+  return records
+    .map((record) => ({ record, at: daysBetween(origin, record.date) * 24 + slotHour(record.slot), points: recordLoad(record, plan, model).cns }))
+    .sort((a, b) => a.at - b.at);
 }
 
 // The practice saved for a date + slot (newest first wins) and its debrief.
@@ -117,11 +107,10 @@ export function weekOf({ plan, date, today, log = [], debriefs = [] }) {
 
 // Totals for the week: written yards and minutes, yards per gear and band
 // (share of the week), kick, CNS per day and what is left each morning, and
-// the targets for the phase. Gears and CNS are counted as the builder counts
-// them (recordLoad: circuit rounds and their gear shifts included), so the
-// Week, Build, Today and the coach chat show the same points. `cns(record)`
-// may count each practice's points instead (the app passes recordCns).
-export function weekTotals(week, plan, model = plan.gears || {}, { cns = null } = {}) {
+// the targets for the phase. Every practice is counted as the builder counts
+// it (recordLoad: circuit rounds and their gear shifts included), so the
+// Week, Build, Today and the coach chat show the same points.
+export function weekTotals(week, plan, model = plan.gears || {}) {
   const byGear = {};
   let distance = 0;
   let minutes = 0;
@@ -130,7 +119,7 @@ export function weekTotals(week, plan, model = plan.gears || {}, { cns = null } 
   let planned = 0;
   let extras = 0; // practices on days or slots the plan doesn't have
   const cnsByDay = week.days.map(() => 0);
-  const loads = [];
+  const records = [];
   week.days.forEach((day, i) => {
     for (const s of day.sessions) {
       if (!s.extra) planned++;
@@ -138,14 +127,13 @@ export function weekTotals(week, plan, model = plan.gears || {}, { cns = null } 
       if (s.extra) extras++;
       else written++;
       const r = s.record;
-      const g = recordGearYards(r);
-      const load = recordLoad(r, plan, model, cns);
-      distance += g.distance;
+      const load = recordLoad(r, plan, model);
+      distance += load.distance;
       minutes += r.minutes || 0;
-      kick += g.kick;
+      kick += load.kick;
       for (const [k, v] of Object.entries(load.byGear)) byGear[k] = (byGear[k] || 0) + v;
       cnsByDay[i] += load.cns;
-      loads.push({ at: i * 24 + (s.slot === 'PM' ? 16 : 6), points: load.cns });
+      records.push(r);
     }
   });
   const bands = Object.fromEntries(BANDS.map((b) => [b.key, 0]));
@@ -156,11 +144,8 @@ export function weekTotals(week, plan, model = plan.gears || {}, { cns = null } 
   const targetYards = plan.weeklyYards ? Math.round(plan.weeklyYards * (week.phase?.volume ?? 1)) : null;
   // CNS left at 6:00 each morning, from this week's sessions and the last
   // days before it.
-  for (const r of week.before || []) {
-    loads.push({ at: daysBetween(week.monday, r.date) * 24 + (r.slot === 'PM' ? 16 : 6), points: recordLoad(r, plan, model, cns).cns });
-  }
-  loads.sort((a, b) => a.at - b.at);
-  const morning = week.days.map((_, i) => cnsResidual(model, loads, i * 24 + 6 - 0.001));
+  const timeline = cnsTimeline([...records, ...(week.before || [])], week.monday, plan, model);
+  const morning = week.days.map((_, i) => cnsResidual(model, timeline, i * 24 + slotHour('AM') - 0.001));
   return {
     distance, minutes, kick, kickShare: distance ? kick / distance : 0, written, planned, extras, unit: plan.unit === 'm' ? 'm' : 'y',
     byGear, bands, share, targets, targetYards,

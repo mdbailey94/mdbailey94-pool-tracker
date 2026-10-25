@@ -220,8 +220,7 @@ test('the week section shows every session with its status, the totals against t
 
 test("the coach's week counts CNS as Build, Today and the Week do (circuit rounds and gear shifts)", async () => {
   const { recordCns, savedRecord } = await import('../src/pw/load.js');
-  const { recordGearYards } = await import('../src/week.js');
-  const { cnsPoints } = await import('../src/gears.js');
+  const { blockCns } = await import('../src/setlang.js');
   // Made-up week with one circuit practice on Monday.
   const wp = defaultPlan('2026-10-19');
   const lw = { weights: {}, calibration: {}, writing: writingContext(wp) };
@@ -236,13 +235,10 @@ test("the coach's week counts CNS as Build, Today and the Week do (circuit round
     const r = savedRecord(ctx, { date: '2026-10-26', title: 'Made-up circuit', focus: 'aerobic', slot: 'AM', blocks, rounds: 3, pattern, composed, text: '' });
     const st = { today: '2026-10-27', plan: wp, blocks: [], log: [r], debriefs: [], style: null };
     const points = recordCns(r, { ...ctx, state: st });
-    const once = cnsPoints(lw.writing.model, recordGearYards(r).byGear); // the old count: each block's lines once
+    const once = r.blocks.reduce((s, b) => s + blockCns(b.lines, lw.writing.model), 0); // the old count: each block's lines once
     assert.ok(points > once, `${pattern}: ${points} vs ${once}`);
     const text = coachContext({ state: st, learned: lw });
     assert.match(text, new RegExp(`CNS points written: Mon ${esc(points)}\\.`), pattern);
-    // The app may hand over its own count (recordCns); it is used as given.
-    assert.match(coachContext({ state: st, learned: lw, cns: (rec) => recordCns(rec, { ...ctx, state: st }) }), new RegExp(`CNS points written: Mon ${esc(points)}\\.`));
-    assert.match(coachContext({ state: st, learned: lw, cns: () => 12.5 }), /CNS points written: Mon 12\.5\./);
   }
 });
 
@@ -254,4 +250,11 @@ test('the coach sees each block\'s description, with or without lines', async ()
   const state = { plan, blocks, log: [], debriefs: [], style: null, prefs: {} };
   const text = coachContext({ state, learned: { weights: {}, calibration: {}, writing: null }, date: '2026-10-20', slot: 'AM' });
   assert.match(typeof text === 'string' ? text : JSON.stringify(text), /description: Paddles off for the last one/);
+});
+
+test('blocks the coach wrote rank above the same block written in the coach chat', () => {
+  const lines = ['6 x 100 free G2'];
+  const mine = makeBlock({ id: 'mine', name: 'Made-up aerobic set', category: 'aerobic', minutes: 20, lines, source: 'pasted' });
+  const chat = makeBlock({ id: 'chat', name: 'Made-up aerobic set', category: 'aerobic', minutes: 20, lines, source: 'claude' });
+  assert.deepEqual(relevantBlocks([chat, mine], { focuses: ['aerobic'] }).map((b) => b.id), ['mine', 'chat']);
 });

@@ -76,10 +76,15 @@ export const DEFAULT_GEAR_MODEL = {
   cnsHalfLifeHours: 12,
 };
 
+// Models makeGearModel built, handed back as they are (every gear function
+// takes a coach's settings or a built model, and sendOff runs per line).
+const BUILT = new WeakSet();
+
 export function makeGearModel(m = {}) {
+  if (BUILT.has(m)) return m;
   const base = DEFAULT_GEAR_MODEL;
   const byName = Object.fromEntries((m.gears || []).map((g) => [g.name, g]));
-  return {
+  const model = {
     ...base,
     ...m,
     gears: base.gears.map((g) => ({ ...g, ...(byName[g.name] || {}) }))
@@ -89,6 +94,8 @@ export function makeGearModel(m = {}) {
     rounding: typeof m.rounding === 'number' ? { short: m.rounding, long: m.rounding, longFrom: 0 } : { ...base.rounding, ...(m.rounding || {}) },
     cns: { ...base.cns, ...(m.cns || {}) },
   };
+  BUILT.add(model);
+  return model;
 }
 
 const offset200 = (m) => (Number.isFinite(m.offset200) ? m.offset200 : DEFAULT_GEAR_MODEL.offset200);
@@ -141,10 +148,18 @@ export function testForGearPace(model, gear, pacePer100, distance = null) {
   return { distance: dist, seconds };
 }
 
+// 'G2.5' → 2.5; anything that is not a gear → null.
 export const gearIndex = (gear) => {
   const m = /^G(\d(?:\.\d)?)$/.exec(String(gear || ''));
   return m ? +m[1] : null;
 };
+
+// 'G2' shifted by 2 → 'G4' (capped at G6, floored at G1).
+export function shiftGear(gear, by) {
+  const m = /^G(\d)(\.\d)?$/.exec(gear || '');
+  if (!m || !by) return gear;
+  return `G${Math.min(6, Math.max(1, +m[1] + by))}${m[2] || ''}`;
+}
 
 // Pace of any gear, including half gears the model doesn't list (G5.5).
 export function paceOf(paces, gear) {
@@ -203,8 +218,7 @@ export function sendOff(model, paces, { gear, distance, stroke = 'free', kind = 
   return roundSendOff(m, swim + restFor(m, gear, swim), distance);
 }
 
-// One row per gear for a group: label and pace per 100 (for the Season tab
-// and the coach chat).
+// One row per gear for a group: label, pace per 100 and how it feels.
 export function paceTable(model, test) {
   const m = makeGearModel(model);
   const paces = gearPaces(m, test);

@@ -4,7 +4,7 @@
 // and stroke, which blocks come up more or less, and notes that come back
 // the next time a block is used.
 
-import { CATEGORIES, CATEGORY_GEAR, FOCUSES, longDate } from '../../practice.js';
+import { CATEGORIES, CATEGORY_GEAR, FOCUSES, longDate, recordBlock } from '../../practice.js';
 import {
   DRILLS, GOALS, INTERVALS, MADE, VERDICTS, blockScores, blockTiming, debriefSummary, intervalCalibration, withTiming,
   learnedFrom, makeDebrief, sectionTouched,
@@ -133,7 +133,7 @@ function sectionHTML(ctx, d, s, i, rec) {
   // The set as it was saved (and swum): the send-offs the app printed that
   // day, not re-timed with what the debriefs have taught it since. Only a
   // line saved without a send-off (the coach's own) gets one filled in.
-  const lines = rb?.lines?.length ? blockLines({ ...rb, source: 'saved' }, ctx, null, d.slot) : [];
+  const lines = rb?.lines?.length ? blockLines(recordBlock(rb), ctx, null, d.slot) : [];
   const unit = rec?.unit || ctx.state.plan.unit;
   const tag = [s.gear, s.stroke && s.stroke !== 'choice' ? s.stroke : '', rb?.circuit ? 'in the circuit' : ''].filter(Boolean).join(' · ');
   const planned = s.plannedDistance ? `~${s.plannedDistance.toLocaleString('en-US')}${unit} written` : '';

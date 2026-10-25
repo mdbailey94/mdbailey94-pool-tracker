@@ -7,9 +7,9 @@
 // Pure: builds paragraphs and the Google Docs batchUpdate requests that
 // append them; src/pw/gdocs.js makes the connector calls.
 
-import { isAdjustment, parseLine, parseSet } from './setlang.js';
+import { isAdjustment, parseLine, parseSet, splitCols } from './setlang.js';
 
-export const WEEKDAY_NAMES = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+const WEEKDAY_NAMES = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 const SPACER_PT = 5;
 
 // "Tuesday" for an AM session, "Tuesday PM" for a double.
@@ -32,7 +32,7 @@ const EM = {
   A: 0.579, B: 0.544, C: 0.533, D: 0.615, E: 0.488, F: 0.459, G: 0.631, H: 0.623, I: 0.252, J: 0.319, K: 0.52, L: 0.42, M: 0.855,
   N: 0.646, O: 0.662, P: 0.517, Q: 0.673, R: 0.543, S: 0.459, T: 0.487, U: 0.653, V: 0.567, W: 0.89, X: 0.519, Y: 0.487, Z: 0.468,
 };
-export function textWidth(text, pt = 11) {
+function textWidth(text, pt = 11) {
   let em = 0;
   for (const c of String(text)) em += EM[c] ?? (/[0-9]/.test(c) ? 0.507 : 0.5);
   return em * pt / 72;
@@ -40,7 +40,7 @@ export function textWidth(text, pt = 11) {
 
 // Default tab stops sit every half inch. Tabs from the end of `text` to the
 // stop at `column` inches (at least one).
-export function tabsFor(text, column = 4.5) {
+function tabsFor(text, column = 4.5) {
   // Widths match a rendered doc to about ±0.03 in (checked on a test doc).
   const x = textWidth(text);
   const n = Math.round(column / 0.5) - Math.floor(x / 0.5);
@@ -49,17 +49,14 @@ export function tabsFor(text, column = 4.5) {
 
 // The column for a session: as far right as the widest send-off allows on a
 // 6.5 in line, between 3 and 4.5 in.
-export function sendOffColumn(lines, lineWidth = 6.5) {
+function sendOffColumn(lines, lineWidth = 6.5) {
   let widest = 0;
   for (const raw of lines) {
-    const m = TAIL.exec(String(raw ?? '').replace(/\s+$/, ''));
-    if (m) widest = Math.max(widest, textWidth(m[1].replace(/\s*\|\s*/g, ' | ')));
+    const { cols } = splitCols(raw);
+    if (cols) widest = Math.max(widest, textWidth(cols));
   }
   return Math.max(3, Math.min(4.5, Math.floor((lineWidth - widest - 0.1) / 0.5) * 0.5));
 }
-
-const CLOCK = '(?::\\d\\d|\\d+:\\d\\d(?:\\.\\d)?)'; // as setlang reads them, tenths too
-const TAIL = new RegExp(`\\s(${CLOCK}(?:\\s*\\|\\s*${CLOCK})*)\\s*$`);
 
 // One set line → a paragraph with its style, in the coach's layout.
 // `typed` is the line as parseSet read it in its block (only a block's first
@@ -69,11 +66,10 @@ export function lineParagraph(raw, column = 4.5, typed = null, groups = []) {
   const text = String(raw ?? '').replace(/\s+$/, '');
   if (!text.trim()) return { text: '', spacer: true };
   const l = typed || parseLine(text);
+  // Send-offs pushed right to the column (setlang reads them, tenths too).
   const aligned = () => {
-    const m = TAIL.exec(text);
-    if (!m) return null;
-    const left = text.slice(0, m.index).trim();
-    return left ? `${left}${tabsFor(left, column)}${m[1].replace(/\s*\|\s*/g, ' | ')}` : null;
+    const { left, cols } = splitCols(text);
+    return cols && left ? `${left}${tabsFor(left, column)}${cols}` : null;
   };
   if (l.type === 'swim') {
     const t = l.intervals.length ? aligned() : null;

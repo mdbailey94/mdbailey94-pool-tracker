@@ -3,9 +3,9 @@
 // with its debrief (written vs actually swum), ready to view, copy, build
 // again or debrief.
 
-import { CATEGORY_GEAR, addDays, daysBetween, fmtDistance, logSummary, longDate, mondayOf } from '../../practice.js';
+import { addDays, daysBetween, fmtDistance, logSummary, longDate, mondayOf } from '../../practice.js';
 import { actualTotals } from '../../learn.js';
-import { gearYards, parseSet } from '../../setlang.js';
+import { bandOf, recordLoad } from '../../week.js';
 import { focusLabel } from '../render.js';
 import { draftBlock } from '../load.js';
 import { openDebrief, replaceDraft } from '../guards.js';
@@ -13,34 +13,29 @@ import { updateDebriefDot } from '../app.js';
 import { summaryText } from './debrief.js';
 import { addToDoc, docBusy, inDoc, weekDocFor } from '../doc-card.js';
 
-// Gear bands for the distribution, easiest first (an ordinal ramp: one hue,
-// light → dark; the colours live in practice-b.css).
+// The Week's gear bands (bandOf) for the distribution, easiest first (an
+// ordinal ramp: one hue, light → dark; the colours live in practice-b.css).
 const BANDS = [
-  { key: 'aer', label: 'G1–G2', name: 'aerobic', match: (n) => n <= 2 },
-  { key: 'thr', label: 'G3–G3.5', name: 'threshold', match: (n) => n === 3 },
-  { key: 'vo2', label: 'G4–G4.5', name: '1000 pace / VO2', match: (n) => n === 4 },
-  { key: 'spd', label: 'G5–G6', name: 'race / speed', match: (n) => n >= 5 },
+  { key: 'aer', band: 'aerobic', label: 'G1–G2', name: 'aerobic' },
+  { key: 'thr', band: 'threshold', label: 'G3–G3.5', name: 'threshold' },
+  { key: 'vo2', band: 'vo2', label: 'G4–G4.5', name: '1000 pace / VO2' },
+  { key: 'spd', band: 'race', label: 'G5–G6', name: 'race / speed' },
 ];
 const PAGE = 20;
 
-// Distance by gear over the last `days` days. A block with set lines counts
-// the yards in its lines in their gears (a G3 → G6 build counts in each gear,
-// as the practice preview and the Week do, also for practices saved with a
-// minutes estimate); one without lines counts its distance in its first gear.
-function gearTotalsByLines(log, today, days = 7) {
-  const out = {};
-  const add = (g, y) => { out[g] = (out[g] || 0) + y; };
-  for (const r of log) {
-    const age = daysBetween(r.date, today);
+// Yards per band over the last `days` days, each practice counted as the
+// Week counts it (recordLoad: its lines in their gears, a G3 → G6 build in
+// each gear, circuit rounds with their gear shifts; a block without lines at
+// its distance in its first gear).
+function bandTotals(ctx, days = 7) {
+  const { state } = ctx;
+  const sums = BANDS.map(() => 0);
+  for (const r of state.log) {
+    const age = daysBetween(r.date, state.today);
     if (age < 0 || age >= days) continue;
-    for (const b of r.blocks || []) {
-      const split = b.lines?.length ? gearYards(parseSet(b.lines.join('\n'))) : {};
-      const sum = Object.values(split).reduce((a, y) => a + y, 0);
-      if (sum) Object.entries(split).forEach(([g, y]) => add(g, y));
-      else add((b.gears && b.gears[0]) || CATEGORY_GEAR[b.category] || 'G2', b.distance || 0);
-    }
+    for (const [g, y] of Object.entries(recordLoad(r, state.plan, ctx.learned.writing.model).byGear)) sums[BANDS.findIndex((b) => b.band === bandOf(g))] += y;
   }
-  return out;
+  return sums;
 }
 
 const hours = (min) => `${Math.round((min || 0) / 6) / 10}h`;
@@ -48,12 +43,7 @@ const pct = (v, total) => (total ? Math.round((v / total) * 100) : 0);
 
 function gearHTML(ctx) {
   const { state, esc } = ctx;
-  const totals = gearTotalsByLines(state.log, state.today, 7);
-  const sums = BANDS.map(() => 0);
-  for (const [g, y] of Object.entries(totals)) {
-    const n = +(/^G(\d)/.exec(g)?.[1] || 2);
-    sums[Math.max(0, BANDS.findIndex((b) => b.match(n)))] += y;
-  }
+  const sums = bandTotals(ctx, 7);
   const total = sums.reduce((a, b) => a + b, 0);
   const unit = state.plan.unit;
   if (!total) return '<p class="muted small">No saved practices in the last 7 days.</p>';

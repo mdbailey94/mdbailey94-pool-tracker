@@ -1118,3 +1118,52 @@ test('a circuit share with fewer reps writes its group adjustments for the reps 
   const named = { ...b, source: 'coach', lines: [...b.lines.filter((l) => parseLine(l).type !== 'adjust'), 'Lane 4 - 7 x 100 in RD3'] };
   assert.ok(!blockLines(named, ctx, { scale: 0.33 }).some((l) => l.startsWith('Lane 4 - 7 x 100')));
 });
+
+// ------------------------------------------------- read once, walk, split
+
+test('a line read again is a fresh copy of the one read before, its arrays frozen', async () => {
+  const { eachItem, kickYards, linesYards, splitCols, STROKE_ABBR } = await import('../src/setlang.js');
+  const raw = '4 x 100 free G3   1:20 | 1:25';
+  const a = parseLine(raw);
+  const b = parseLine(raw);
+  assert.notEqual(a, b);
+  assert.deepEqual(a, b);
+  assert.ok(Object.isFrozen(a.intervals) && Object.isFrozen(a.gears));
+  a.reps = 9; // a reader's own copy
+  assert.equal(parseLine(raw).reps, 4);
+  // The same text twice in a set is two lines (a pre-set and a round line).
+  const p = parseSet('4 x 100 free G2\n3 rounds:\n4 x 100 free G2');
+  assert.notEqual(p.structure[0], p.structure[1].items[0]);
+
+  // Every line with how many times it is swum.
+  const seen = [];
+  eachItem(parseSet('200 easy\n3 rounds:\n4 x 50 kick G2\n:15 REST\n\n100 easy'), (l, times) => seen.push([l.raw, times]));
+  assert.deepEqual(seen, [['200 easy', 1], ['4 x 50 kick G2', 3], [':15 REST', 3], ['100 easy', 1]]);
+  assert.equal(kickYards(parseSet('3 rounds:\n4 x 50 kick G2\n4 x 100 free G2')), 600);
+  // One round's share of a block prints fewer reps, and kicks fewer yards.
+  assert.deepEqual(linesYards(['6 x 50 kick G2', '4 x 100 free G3'], { scale: 0.5, gearShift: 1 }), { byGear: { G3: 150, G4: 200 }, kick: 150 });
+
+  // Send-off columns and the text before them, tenths and "@" too.
+  assert.deepEqual(splitCols('3 x 300 free   3:35|3:50 |4:05  '), { left: '3 x 300 free', cols: '3:35 | 3:50 | 4:05' });
+  assert.deepEqual(splitCols('G3 pace\t1:02.5 | 1:05'), { left: 'G3 pace', cols: '1:02.5 | 1:05' });
+  assert.deepEqual(splitCols('4 x 50 kick @1:00'), { left: '4 x 50 kick @', cols: '1:00' });
+  assert.deepEqual(splitCols('8 x 25 fast, rest as needed'), { left: '8 x 25 fast, rest as needed', cols: '' });
+  assert.equal(STROKE_ABBR.fly, 'FL');
+});
+
+test('the block writer can be told the category of the block it writes', () => {
+  const pull = generateBlock({ focus: 'aerobic', minutes: 30, stroke: 'free', ctx: CTX, category: 'pull' });
+  assert.equal(pull.category, 'pull');
+  assert.equal(generateBlock({ focus: 'aerobic', minutes: 30, stroke: 'free', ctx: CTX }).category, 'aerobic');
+  assert.equal(generateBlock({ focus: 'im', minutes: 30, stroke: 'IM', ctx: CTX }).stroke, 'IM');
+});
+
+test('set rows on the page: send-offs split off, group-keyed adjustments styled as in the doc', async () => {
+  const { linesHTML } = await import('../src/pw/render.js');
+  const lines = ['G3 pace       1:02 | 1:05', '4 x 100 free G3   1:20|1:25', 'Lane 4 - 3 x 100 in RD3', '#2 G2.5, breathe every 5th'];
+  const html = linesHTML(lines, CTX.groups);
+  assert.match(html, /<span>4 x 100 free G3<\/span><span class="iv">1:20 \| 1:25<\/span>/);
+  assert.match(html, /class="setline adjust"><span>Lane 4 - 3 x 100 in RD3/);
+  assert.match(html, /class="setline note"><span>#2 G2\.5/);
+  assert.match(linesHTML(lines), /class="setline "><span>Lane 4 - 3 x 100 in RD3/, 'without the groups it is plain text');
+});

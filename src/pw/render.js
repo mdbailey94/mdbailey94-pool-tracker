@@ -2,16 +2,19 @@
 // columns, circuits with differing rounds, notes from past debriefs, and the
 // totals (time, distance, CNS load) for a practice.
 
-import { blockLine, composedGearYards, FOCUSES, fmtDistance, PATTERNS, practiceText, shareLine, shareScale, STROKE_LABEL } from '../practice.js';
+import { blockLine, composedGearYards, focusLabel, fmtDistance, PATTERNS, practiceText, retimes, shareLine, shareScale, STROKE_LABEL } from '../practice.js';
 import { cnsPoints } from '../gears.js';
 import { carryForward, VERDICTS } from '../learn.js';
-import { blockSecondsByGroup, groupAdjustments, isAdjustment, parseLine, parseSet, writeLines } from '../setlang.js';
+import { blockSecondsByGroup, groupAdjustments, isAdjustment, parseLine, parseSet, splitCols, writeLines } from '../setlang.js';
 import { esc } from './ui.js';
+
+export { focusLabel };
 
 // Lines of a block ready to print for a share of a circuit (gear shift,
 // scaled reps) with send-offs filled in from the gear chart and style.
-// Blocks the app wrote are re-timed every time, so their send-offs follow
-// the groups, style and debriefs as they are now (the coach's stay as written).
+// Blocks the app wrote are re-timed every time (retimes), so their send-offs
+// follow the groups, style and debriefs as they are now; the coach's stay as
+// written, and so do the lines of a saved practice (recordBlock: as printed).
 // A share with scaled reps gets its group adjustments written again for the
 // reps it prints (the block's own were for its full reps).
 export function blockLines(block, ctx, share = null, slot = 'AM') {
@@ -22,7 +25,7 @@ export function blockLines(block, ctx, share = null, slot = 'AM') {
     gearShift: share?.gearShift || 0,
     scale,
     single: slot === 'PM',
-    retimeAll: block.source === 'generated',
+    retimeAll: retimes(block),
   });
   const groups = wctx.groups || [];
   if (scale === 1 || !out.some((raw) => isAdjustment(raw, groups))) return out;
@@ -46,8 +49,11 @@ export function circuitLines(item, ctx, slot = 'AM') {
 }
 
 // Set lines as HTML rows: description left, send-off columns right. Only a
-// first line reads as a "36 min …" heading; later ones are timed work.
-export function linesHTML(lines) {
+// first line reads as a "36 min …" heading; later ones are timed work. A
+// group adjustment keyed by one of `groups`' column keys or names ("L4 - …")
+// reads as an adjustment, as in the Google Doc.
+const LINE_CLASS = { ref: 'ref', rounds: 'rounds', rest: 'rest', heading: 'rounds', adjust: 'adjust' };
+export function linesHTML(lines, groups = []) {
   if (!lines?.length) return '';
   const typed = parseSet(lines.join('\n')).lines;
   const aligned = typed.length === lines.length;
@@ -55,11 +61,10 @@ export function linesHTML(lines) {
     const l = aligned ? typed[i] : parseLine(raw);
     if (l.type === 'blank') return '';
     if (l.type === 'swim') {
-      const iv = /\s{2,}((?::\d\d|\d+:\d\d)(?:\s*\|\s*(?::\d\d|\d+:\d\d))*)\s*$/.exec(raw);
-      const left = iv ? raw.slice(0, iv.index) : raw;
-      return `<div class="setline"><span>${esc(left.trim())}</span><span class="iv">${esc(iv ? iv[1].replace(/\s*\|\s*/g, ' | ') : '')}</span></div>`;
+      const { left, cols } = splitCols(raw);
+      return `<div class="setline"><span>${esc(left)}</span><span class="iv">${esc(cols)}</span></div>`;
     }
-    const cls = { ref: 'ref', rounds: 'rounds', rest: 'rest', adjust: 'adjust', note: 'note', heading: 'rounds' }[l.type] || '';
+    const cls = LINE_CLASS[l.type] || (isAdjustment(raw, groups) ? 'adjust' : l.type === 'note' ? 'note' : '');
     return `<div class="setline ${cls}"><span>${esc(String(raw).trim())}</span><span></span></div>`;
   }).join('')}</div>`;
 }
@@ -70,7 +75,7 @@ export function linesHTML(lines) {
 // and a block without set lines counts its distance (its round's share) in
 // its first gear (composedGearYards, which the Week and the coach chat use
 // too), so a starter block is not free.
-export function practiceMetrics(composed, ctx, slot = 'AM') {
+export function practiceMetrics(composed, ctx) {
   const byGear = composedGearYards(composed);
   return { minutes: composed.minutes, distance: composed.distance, byGear, cns: cnsPoints(ctx.learned.writing.model, byGear) };
 }
@@ -87,19 +92,20 @@ const strokeTag = (b) => (b.stroke && b.stroke !== 'choice' ? ` · ${STROKE_LABE
 // A composed practice as HTML.
 export function practiceHTML(composed, ctx, { showDetail = true, slot = 'AM', carry = true } = {}) {
   const { unit } = composed;
-  const m = practiceMetrics(composed, ctx, slot);
+  const m = practiceMetrics(composed, ctx);
+  const groups = ctx.learned.writing.groups || [];
   return `<div class="practice">
     ${composed.sections.map((s) => (s.type === 'block' ? `
       <div class="set">
         <div class="line">${esc(blockLine(s.block, unit))}<span>${s.block.minutes ? `~${fmtDistance(s.distance, unit)}` : `~${s.minutes} min`}${esc(strokeTag(s.block))}${esc(kit(s.block))}</span></div>
-        ${linesHTML(blockLines(s.block, ctx, null, slot))}
+        ${linesHTML(blockLines(s.block, ctx, null, slot), groups)}
         ${showDetail && s.block.detail ? `<p class="detail">${esc(s.block.detail)}</p>` : ''}
         ${carry ? carryHTML(ctx, s.block.id) : ''}
       </div>` : `
       <div class="set">
         <div class="line"><span class="round-head">${s.rounds} round${s.rounds === 1 ? '' : 's'} of${s.pattern !== 'even' ? ` · ${esc(PATTERNS[s.pattern].label.toLowerCase())}` : ''}</span><span>~${s.minutes} min · ~${fmtDistance(s.distance, unit)}</span></div>
         <ul>${s.items.map((it) => `<li><div>${esc(shareLine(it, unit))}<span class="muted small">${esc(strokeTag(it.block))}${esc(kit(it.block))}</span></div>
-          ${linesHTML(circuitLines(it, ctx, slot))}
+          ${linesHTML(circuitLines(it, ctx, slot), groups)}
           ${showDetail && it.block.detail ? `<p class="detail">${esc(it.block.detail)}</p>` : ''}
           ${carry ? carryHTML(ctx, it.block.id) : ''}</li>`).join('')}</ul>
       </div>`)).join('')}
@@ -114,5 +120,3 @@ export function practiceTextFor(composed, ctx, meta = {}) {
   composed.sections.forEach((s) => s.type === 'circuit' && s.items.forEach((it) => items.set(it.block, it)));
   return practiceText(composed, { ...meta, renderLines: (block, share) => (items.has(block) ? circuitLines(items.get(block), ctx, meta.slot || 'AM') : blockLines(block, ctx, share, meta.slot || 'AM')) });
 }
-
-export const focusLabel = (f) => FOCUSES[f]?.label || f || '';

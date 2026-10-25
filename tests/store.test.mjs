@@ -397,3 +397,58 @@ test('replaying waits for a database that can be read', async () => {
   await assert.rejects(replayJournal(dbBackend(db), [['set', 'plan', { name: 'Edited' }]], { plan: { name: 'Season' } }));
   assert.equal(db.docs.get('kv/plan').value.name, 'Club plan');
 });
+
+// ------------------------------------------------------- many writes at once
+
+test('this device: quick writes to a collection are stored together, read once, and keep another tab\'s', async () => {
+  const ls = fakeLocalStorage();
+  let sets = 0;
+  let gets = 0;
+  const { getItem, setItem } = ls;
+  ls.getItem = (k) => { gets++; return getItem(k); };
+  ls.setItem = (k, v) => { sets++; setItem(k, v); };
+  globalThis.localStorage = ls;
+  const s = localBackend();
+  const oks = await Promise.all([1, 2, 3, 4, 5].map((n) => s.put('log', `p${n}`, { date: `2026-10-2${n}` })));
+  assert.deepEqual(oks, [true, true, true, true, true]);
+  assert.equal(sets, 1, 'one write for the five records');
+  assert.deepEqual((await s.list('log')).map((r) => r.id), ['p5', 'p4', 'p3', 'p2', 'p1']);
+  // Another tab adds a practice; the next write here keeps it.
+  const there = JSON.parse(getItem('pool-practice-log'));
+  setItem('pool-practice-log', JSON.stringify([{ id: 'tab', date: '2026-10-30' }, ...there]));
+  await s.remove('log', 'p1');
+  assert.deepEqual((await s.list('log')).map((r) => r.id), ['tab', 'p5', 'p4', 'p3', 'p2']);
+  // Unchanged text is not read again: a write costs one look at it.
+  gets = 0;
+  await s.put('blocks', 'b1', { name: 'Made-up block' });
+  await s.put('blocks', 'b2', { name: 'Made-up block 2' });
+  assert.equal(gets, 2);
+  delete globalThis.localStorage;
+});
+
+test('the database: a big putMany keeps a few writes in flight at a time, and stores every one', async () => {
+  const db = controlDb();
+  let inFlight = 0;
+  let most = 0;
+  const doc = db.doc;
+  db.doc = (path) => {
+    const d = doc(path);
+    return { ...d, async set(v) { inFlight++; most = Math.max(most, inFlight); await new Promise((r) => setTimeout(r, 2)); inFlight--; return d.set(v); } };
+  };
+  const s = dbBackend(db);
+  const rows = Array.from({ length: 40 }, (_, i) => ({ id: `b${i}`, name: `Made-up ${i}` }));
+  assert.equal(await s.putMany('blocks', rows), true);
+  assert.equal(blockKeys(db).length, 40);
+  assert.ok(most > 1 && most <= 6, `at most 6 at once (${most})`);
+});
+
+test('a backup holds every key and collection, in the file\'s order', async () => {
+  const { exportAll } = await import('../src/practice-store.js');
+  const db = controlDb([['kv/plan', { value: CLUB_PLAN }], ['blocks/own', { id: 'own', name: 'Sample kick' }], ['log/p1', { id: 'p1', date: '2026-10-20' }]]);
+  const data = JSON.parse(await exportAll(dbBackend(db)));
+  assert.deepEqual(Object.keys(data), ['version', 'exported', 'plan', 'prefs', 'style', 'blocks', 'log', 'debriefs']);
+  assert.equal(data.plan.name, 'Club plan');
+  assert.deepEqual([data.blocks.length, data.log.length, data.debriefs.length], [1, 1, 0]);
+  db.fail.read = 'unavailable';
+  await assert.rejects(exportAll(dbBackend(db)));
+});
