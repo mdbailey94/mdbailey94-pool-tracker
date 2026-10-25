@@ -1,0 +1,69 @@
+/* Practice Writer screens, builder a (see SPEC-UI): Today + Coach. */
+
+/* ---------- Today */
+.tw-head h2 { margin-bottom: 2px; }
+.tw-week div { position: relative; padding-bottom: 16px; }
+.tw-week .pm { position: absolute; left: 0; right: 0; bottom: 3px; font-style: normal; font-size: 10px; font-weight: 700; color: var(--accent); letter-spacing: .02em; }
+.tw-week .meetday { border-color: var(--warning); background: color-mix(in srgb, var(--warning) 14%, transparent); }
+.tw-banners { display: grid; gap: 8px; margin-top: 10px; }
+.tw-banners .banner { flex-wrap: wrap; }
+.tw-banners .banner > span { flex: 1 1 200px; min-width: 0; }
+.tw-banners .banner .btn { flex: 0 0 auto; }
+
+.session.active { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.session .btn { margin-top: 4px; }
+.tw-focus { font-size: 16px; }
+.tw-done { color: var(--good); font-weight: 600; }
+
+.tw-ask .lead { font-weight: 600; color: var(--text); margin-bottom: 2px; }
+.tw-ask .q textarea { min-height: 72px; }
+
+.tw-bare { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); }
+.tw-bare-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 4px 0; font-size: 14px; }
+.tw-bare-row span { min-width: 0; overflow-wrap: anywhere; }
+.tw-bare-row .btn { flex: 0 0 auto; }
+
+.tw-debrief, .coach-link { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; }
+.tw-debrief > div, .coach-link > div { flex: 1 1 220px; min-width: 0; }
+.tw-debrief h3, .coach-link h3 { margin-bottom: 2px; }
+.tw-debrief p, .coach-link p { margin: 0; }
+.tw-debrief { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
+
+.tw-cns { display: flex; flex-wrap: wrap; gap: 8px 24px; margin: 4px 0 6px; }
+.tw-cns > div { display: grid; }
+.tw-cns b { font-size: 24px; font-variant-numeric: tabular-nums; line-height: 1.2; }
+.tw-cns b.hi { color: var(--critical); }
+.tw-load .banner { margin-top: 8px; }
+
+/* ---------- Coach */
+.cc-head-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.cc-head-row .btn { flex: 0 0 auto; }
+.cc-sees { margin-top: 6px; font-size: 14px; color: var(--text-2); }
+.cc-sees summary { cursor: pointer; font-weight: 600; }
+.cc-sees pre.text { max-height: 320px; overflow: auto; font-size: 12px; }
+
+.cc-chat .chat { min-height: 60px; }
+.cc-bubble { white-space: normal; }
+.cc-bubble.wide { justify-self: stretch; max-width: 100%; }
+.cc-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+.cc-att { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); min-width: 0; }
+.cc-att:first-child { margin-top: 0; padding-top: 0; border-top: 0; }
+.cc-att-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 2px 10px; margin-bottom: 4px; }
+.cc-att .actions { margin-top: 8px; }
+.cc-att .actions > .btn { flex: 0 1 auto; }
+.cc-att .practice .line { flex-wrap: wrap; }
+.cc-att .practice .line span { white-space: normal; }
+.cc-thinking { color: var(--muted); font-style: italic; }
+.cc-thinking::after { content: ''; display: inline-block; width: 6px; height: 6px; margin-left: 8px; border-radius: 50%; background: var(--accent); vertical-align: 2px; animation: cc-pulse 1s ease-in-out infinite; }
+@keyframes cc-pulse { 50% { opacity: .2; } }
+.cc-error { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--critical); background: color-mix(in srgb, var(--critical) 10%, var(--bg)); font-size: 14px; }
+.cc-error span { flex: 1 1 200px; }
+.cc-quick { margin: 12px 0 0; }
+.cc-quick .chip { min-height: 32px; font-size: 13px; }
+.cc-composer { z-index: 3; }
+.cc-composer .btn { flex: 0 0 auto; }
+
+.cc-result { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); }
+.cc-off .lead { margin-top: 4px; }
+.cc-off h2 { font-size: 20px; }
+textarea#cc-quick { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; min-height: 140px; }

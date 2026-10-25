@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Practice Writer</title>
+  <meta name="description" content="Daily swim practices from the season plan and gear chart: suggestions, a coach to text, debriefs, and blocks written in your own style.">
+  <meta name="theme-color" content="#2a78d6">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icon.svg">
+  <link rel="stylesheet" href="pool.css">
+  <link rel="stylesheet" href="practice.css">
+  <link rel="stylesheet" href="practice-a.css">
+  <link rel="stylesheet" href="practice-b.css">
+  <link rel="stylesheet" href="practice-c.css">
+  <link rel="stylesheet" href="practice-w.css">
+  <link rel="stylesheet" href="practice-d.css">
+</head>
+<body>
+  <header class="topbar">
+    <h1>Practice Writer</h1>
+    <a class="toplink" href="./">Pool Tracker</a>
+  </header>
+
+  <nav class="tabs" id="tabs" aria-label="Sections"></nav>
+
+  <main>
+    <div id="view" class="view"></div>
+  </main>
+  <div id="toast" class="toast" role="status" hidden></div>
+
+  <script type="module" src="src/practice-app.js"></script>
+</body>
+</html>

@@ -7,6 +7,9 @@
   "display": "standalone",
   "background_color": "#f4f4f2",
   "theme_color": "#2a78d6",
+  "shortcuts": [
+    { "name": "Practice Writer", "url": "./practice.html", "description": "Today's practice from the season plan" }
+  ],
   "icons": [
     { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
   ]

@@ -63,6 +63,7 @@ a { color: var(--accent); }
   backdrop-filter: blur(8px);
 }
 .topbar h1 { margin: 0; }
+.toplink { font-size: 14px; font-weight: 600; text-decoration: none; }
 main { max-width: 1200px; margin: 0 auto; padding: 0 16px; }
 #home { max-width: 640px; margin: 0 auto; }
 
