@@ -168,13 +168,13 @@ function weekHTML(ctx) {
   const cell = (i, slot) => `<input type="number" min="0" max="300" step="5" inputmode="numeric" data-f="w-${slot}-${i}" value="${week[i][slot] || 0}" aria-label="${WEEKDAYS[i]} ${slot.toUpperCase()} minutes" class="${week[i][slot] ? '' : 'off'}">`;
   return `<section class="card" id="se-week">
     <h2>Week schedule</h2>
-    <p class="muted small">Minutes in the water each session; 0 = no session. Phase volume scales these.</p>
+    <p class="muted small">Minutes in the water each session; 0 = no session. A phase's volume % changes the yards, not these times.</p>
     <div class="c-week" role="group" aria-label="Minutes per session">
       <span></span>${WEEKDAYS.map((d) => `<b>${d}</b>`).join('')}
       <span>AM</span>${WEEKDAYS.map((_, i) => cell(i, 'am')).join('')}
       <span>PM</span>${WEEKDAYS.map((_, i) => cell(i, 'pm')).join('')}
     </div>
-    <p class="small c-gap"><b>${am.length}</b> AM + <b>${pm.length}</b> PM session${am.length + pm.length === 1 ? '' : 's'} · <b>${Math.floor(mins / 60)} h${mins % 60 ? ` ${mins % 60} min` : ''}</b> a week at full volume</p>
+    <p class="small c-gap"><b>${am.length}</b> AM + <b>${pm.length}</b> PM session${am.length + pm.length === 1 ? '' : 's'} · <b>${Math.floor(mins / 60)} h${mins % 60 ? ` ${mins % 60} min` : ''}</b> a week</p>
     <details class="c-details">
       <summary>Session themes</summary>
       <p class="muted small">Optional words for a session ("Test sets", "Speciality workouts"); they show on Today and the coach reads them.</p>

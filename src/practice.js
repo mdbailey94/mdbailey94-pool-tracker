@@ -489,7 +489,9 @@ export function nextMeet(plan, date) {
 }
 
 // The sessions on a date: AM (and PM on double days) with their focus and
-// length, or none on a meet or rest day. The day before a meet keeps one
+// length, or none on a meet or rest day. A session is as long as the week
+// schedule says whatever the phase: its volume % scales the yards (the
+// Week's target), not the time in the water. The day before a meet keeps one
 // short sharpening session when plan.preMeet is on.
 export function sessionsOn(plan, date) {
   const pos = planPosition(plan, date);
@@ -503,7 +505,7 @@ export function sessionsOn(plan, date) {
   const want = [['AM', day.am, pos.focus, day.amTheme], ['PM', day.pm, pmFocus, day.pmTheme]];
   for (const [slot, minutes, focus, theme] of want) {
     if (!minutes || !focus || focus === 'rest') continue;
-    out.sessions.push({ slot, minutes: Math.max(20, Math.round(minutes * vol)), focus, volume: vol, theme: theme || '' });
+    out.sessions.push({ slot, minutes: Math.max(20, Math.round(minutes)), focus, volume: vol, theme: theme || '' });
   }
   const tomorrow = addDays(date, 1);
   if (plan.preMeet !== false && out.sessions.length && meetOn(plan, tomorrow) && !meetOn(plan, date)) {
@@ -547,7 +549,7 @@ export function suggestPractice({ plan, library, date = todayISO(), history = []
   let dayFocus = focus || session?.focus || (day.meet ? 'rest' : slot === 'PM' ? 'rest' : pos.focus) || 'aerobic';
   const planned = dayFocus;
   if (feeling === 'tired' && !focus) dayFocus = EASIER[dayFocus] || dayFocus;
-  const fallbackMinutes = (plan.week?.[pos.weekday]?.[theSlot.toLowerCase()] || 120) * (pos.phase?.volume ?? 1);
+  const fallbackMinutes = plan.week?.[pos.weekday]?.[theSlot.toLowerCase()] || 120;
   const budget = Math.max(20, Math.round(minutes || session?.minutes || fallbackMinutes));
   const result = { date, slot: theSlot, position: pos, meet: day.meet, preMeet: day.preMeet, focus: dayFocus, plannedFocus: planned, minutes: budget, blocks: [], rounds: 1, pattern: 'even', notes: [] };
   if (session?.note) result.notes.push(session.note);

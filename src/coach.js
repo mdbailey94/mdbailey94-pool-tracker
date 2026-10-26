@@ -36,6 +36,7 @@ How this coach writes a set:
 - Slower groups swim the same set and finish in the same minutes through group adjustment lines (drop the first rep of the pre-set, skip the low gear of a build in later rounds, fewer reps in the last round), not a different set.
 - The block's minutes are the time the fastest group needs for its lines.
 - PM doubles are short (about 20-60 min): straight sets with one send-off for everyone (no group columns, no adjustments).
+- A phase's volume % is about yards, not time: sessions keep their scheduled minutes, and a higher volume means more yards in that time (shorter rest, fewer easy yards), a lower one fewer.
 - No practice on a meet day. Before a meet: less volume, sharper, more rest; the day before is a short sharpen.
 - Use the debriefs: intervals too hard or few made the send-offs -> more rest or slower send-offs; too easy -> tighten them; drills not working -> change the drill or the focus; a block rated bad -> change it or leave it out; keep what the coach said they changed. Say in "reply" what you took from the debriefs.
 - THIS WEEK shows each session's status (open, written, swum, debriefed), what is already written and the week's gear bands and kick against the phase targets. When writing a session or planning the rest of the week, steer what is still open toward the targets (more of a band that is under, less of one that is over), mind the CNS load before race-pace and speed days, and don't repeat a main set already written this week. To plan several sessions, answer in "reply" day by day (focus, main set, yards) and put any new sets in "blocks".
@@ -453,7 +454,7 @@ export function offlineReply(message, wctx = null) {
 
 const PLAN_RULES = `You are helping a swim coach plan their season. You get their answers (meets with priorities, weekly schedule, philosophy, key skills, equipment) and the phases already in the plan. Reply with JSON only.
 Focuses a session can have: ${Object.keys(FOCUSES).join(', ')}.
-A phase is { "name", "weeks" (whole weeks), "volume" (0.4 to 1.3, 1 = a full week), "description" (one or two sentences in the coach's terms: what the phase is for and what to watch), "am": [7 focuses, Monday first], "pm": [7 focuses or null, Monday first; null where the week has no PM session] }.
+A phase is { "name", "weeks" (whole weeks), "volume" (0.4 to 1.3: the share of a hard week's yards; 1 = a full week. Session times stay as scheduled), "description" (one or two sentences in the coach's terms: what the phase is for and what to watch), "am": [7 focuses, Monday first], "pm": [7 focuses or null, Monday first; null where the week has no PM session] }.
 Plan back from the A meets: a taper that ends the week of each A meet, and the build to it before. B meets get at most an easy day or two; C meets are trained through. Use the coach's philosophy and key skills in the focuses and the descriptions. Sunday is usually "rest".`;
 
 function planBrief(plan, today, from) {

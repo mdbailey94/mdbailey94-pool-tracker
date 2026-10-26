@@ -133,7 +133,7 @@ test('the default week is 2 hours every morning but Sunday, doubles Tuesday and 
   assert.deepEqual(day('2026-09-08'), ['AM:120:technique', 'PM:60:aerobic']); // Tue double
   assert.deepEqual(day('2026-09-10'), ['AM:120:threshold', 'PM:60:aerobic']); // Thu double
   assert.deepEqual(day('2026-09-13'), []); // Sunday
-  assert.deepEqual(day('2026-10-27'), ['AM:132:threshold', 'PM:66:aerobic']); // Build volume 1.1
+  assert.deepEqual(day('2026-10-27'), ['AM:120:threshold', 'PM:60:aerobic']); // Build volume 1.1: more yards, same time
 });
 
 test('meet days have no practice; the day before sharpens', () => {
@@ -144,7 +144,7 @@ test('meet days have no practice; the day before sharpens', () => {
   assert.deepEqual(fri.sessions, []);
   const thu = sessionsOn(p, '2026-11-12');
   assert.equal(thu.preMeet, true);
-  assert.deepEqual(thu.sessions.map((x) => [x.slot, x.focus, x.minutes]), [['AM', 'speed', 79]]);
+  assert.deepEqual(thu.sessions.map((x) => [x.slot, x.focus, x.minutes]), [['AM', 'speed', 72]]);
   assert.match(thu.sessions[0].note, /Fall Invite/);
   assert.equal(nextMeet(p, '2026-11-01').name, 'Fall Invite');
   const s = suggestPractice({ plan: p, library: lib, date: '2026-11-14' });
