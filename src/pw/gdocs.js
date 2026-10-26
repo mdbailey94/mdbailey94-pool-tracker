@@ -124,7 +124,7 @@ async function read(mcp, server, tool, input, op = 'read') {
 }
 
 // The documents.get result (docEnd reads it, wrapped in `content` or not).
-async function readDoc(mcp, documentId) {
+export async function readDoc(mcp, documentId) {
   return read(mcp, DOCS, 'read_doc', { documentId });
 }
 

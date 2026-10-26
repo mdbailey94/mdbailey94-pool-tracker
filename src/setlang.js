@@ -781,7 +781,7 @@ export function generateBlock({ focus = 'aerobic', minutes = 40, stroke = 'free'
 // What a block heading says it is ("30 min warm-up", "40 min free aerobic"),
 // in the order the words win.
 const HEADING_CATEGORY = [
-  [/warm[\s-]?up|loosen/, 'warmup'], [/(cool|warm)[\s-]?down/, 'cooldown'], [/\bkick\b/, 'kick'], [/\bpull\b/, 'pull'],
+  [/warm[\s-]?up|loosen|^wu\b/, 'warmup'], [/(cool|warm)[\s-]?down|^(wd|cd)\b/, 'cooldown'], [/\bkick\b/, 'kick'], [/\bpull\b/, 'pull'],
   [/\b(drills?|technique|socks)\b/, 'technique'], [/\b(sharpen|sprints?|speed)\b/, 'speed'], [/\b(race|rp|broken)\b|\b\d+\s*pace\b/, 'race'],
   [/\bthreshold\b/, 'threshold'], [/\baerobic\b/, 'aerobic'],
 ];

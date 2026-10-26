@@ -79,6 +79,10 @@ and the coach's own blocks, and learns from what happens on deck.
   title or created in the practice folder; a doc can also be linked by URL. It uses the viewer's own Google
   Drive and Google Docs connectors, appends at the end of the doc guarded by the revision it read, and never
   repeats a write whose outcome is unknown. Add from the Week card, a Log entry, or "Save and add" in Build.
+  "Fill in from the doc" on the Week card reads a doc the coach already wrote into: it finds the day
+  headings and block headings, matches each block to the library by its lines or name, and lists what it
+  found to review first — keep or replace practices the app already has, and add blocks it doesn't
+  recognise to the library (with a guessed category). Filled-in sessions are marked as in the doc.
 - **Today.** The day's sessions with a few questions (time, how the group is, equipment, focus) → a suggested
   practice with group send-off columns, notes from past debriefs and the CNS load.
 - **Coach.** In the claude.ai version of the page, a chat where the coach can text requests ("write today's
@@ -132,6 +136,7 @@ src/learn.js       debriefs and what they teach (pure, tested)
 src/coach.js       prompts and replies for the coach chat (pure, tested)
 src/week.js        the week: session status, totals vs phase targets, drafts (pure, tested)
 src/gdoc.js        a session → Google Doc paragraphs and the batchUpdate that appends them (pure, tested)
+src/docscan.js     a week's Google Doc → the sessions and blocks written in it (pure, tested)
 src/practice-store.js  storage: artifact database or localStorage
 src/pw/            Practice Writer UI (app shell, views/, shared rendering)
 scripts/build-artifact.mjs  builds the claude.ai Artifact version
