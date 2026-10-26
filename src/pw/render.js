@@ -6,6 +6,7 @@ import { blockLine, composedGearYards, focusLabel, fmtDistance, PATTERNS, practi
 import { cnsPoints } from '../gears.js';
 import { carryForward, VERDICTS } from '../learn.js';
 import { blockSecondsByGroup, groupAdjustments, isAdjustment, parseLine, parseSet, splitCols, writeLines } from '../setlang.js';
+import { blockNote } from '../ideas.js';
 import { esc } from './ui.js';
 
 export { focusLabel };
@@ -35,6 +36,9 @@ export function blockLines(block, ctx, share = null, slot = 'AM') {
   const fastest = blockSecondsByGroup(lines, wctx)[0];
   return [...lines, ...groupAdjustments(lines, wctx, Math.max(1, Math.round(fastest / 60)))];
 }
+
+// The phase's note and the description under a block, a paragraph a line.
+const noteHTML = (b, withDetail) => blockNote(b, withDetail).split('\n').filter(Boolean).map((t) => `<p class="detail">${esc(t)}</p>`).join('');
 
 // A circuit item's lines: one listing when every round is the same, else
 // one per round ("RD1", "RD2", …).
@@ -99,14 +103,14 @@ export function practiceHTML(composed, ctx, { showDetail = true, slot = 'AM', ca
       <div class="set">
         <div class="line">${esc(blockLine(s.block, unit))}<span>${s.block.minutes ? `~${fmtDistance(s.distance, unit)}` : `~${s.minutes} min`}${esc(strokeTag(s.block))}${esc(kit(s.block))}</span></div>
         ${linesHTML(blockLines(s.block, ctx, null, slot), groups)}
-        ${showDetail && s.block.detail ? `<p class="detail">${esc(s.block.detail)}</p>` : ''}
+        ${noteHTML(s.block, showDetail)}
         ${carry ? carryHTML(ctx, s.block.id) : ''}
       </div>` : `
       <div class="set">
         <div class="line"><span class="round-head">${s.rounds} round${s.rounds === 1 ? '' : 's'} of${s.pattern !== 'even' ? ` · ${esc(PATTERNS[s.pattern].label.toLowerCase())}` : ''}</span><span>~${s.minutes} min · ~${fmtDistance(s.distance, unit)}</span></div>
         <ul>${s.items.map((it) => `<li><div>${esc(shareLine(it, unit))}<span class="muted small">${esc(strokeTag(it.block))}${esc(kit(it.block))}</span></div>
           ${linesHTML(circuitLines(it, ctx, slot), groups)}
-          ${showDetail && it.block.detail ? `<p class="detail">${esc(it.block.detail)}</p>` : ''}
+          ${noteHTML(it.block, showDetail)}
           ${carry ? carryHTML(ctx, it.block.id) : ''}</li>`).join('')}</ul>
       </div>`)).join('')}
     <div class="totals"><span>Total</span><span>≈ ${composed.minutes} min · ~${fmtDistance(composed.distance, unit)}</span></div>

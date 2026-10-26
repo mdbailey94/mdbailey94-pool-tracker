@@ -7,6 +7,7 @@
 
 import { gearIndex, shiftGear } from './gears.js';
 import { STROKE_ABBR, linesYards, parseSet, setDistance, setSeconds } from './setlang.js';
+import { blockNote, hashSeed, ideaVersion, lastVersion, normalStages, rng } from './ideas.js';
 
 export { shiftGear };
 
@@ -104,6 +105,10 @@ export function makeBlock(b) {
     lines: (Array.isArray(b.lines) ? b.lines : String(b.lines || '').split('\n')).map((l) => String(l).replace(/\s+$/, '')).filter((l, i, a) => l.trim() || (i > 0 && i < a.length - 1)),
     source: String(b.source || ''),
   };
+  // An idea: written again each time it is used (src/ideas.js).
+  if (b.idea) block.idea = true;
+  const stages = normalStages(b.stages);
+  if (Object.keys(stages).length) block.stages = stages;
   if (!block.minutes && !block.distance) block.minutes = 10;
   if (block.minutes && block.distance) block.distance = null; // one measure only
   return block;
@@ -497,18 +502,6 @@ export function sessionsOn(plan, date) {
 
 // ----------------------------------------------------------- suggestions
 
-// Deterministic jitter so a day's suggestion is stable, and "another one"
-// (variant) gives a different but repeatable answer.
-function hashSeed(str) {
-  let h = 2166136261;
-  for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 16777619); }
-  return h >>> 0;
-}
-function rng(seed) {
-  let s = seed || 1;
-  return () => { s = (Math.imul(s, 1664525) + 1013904223) >>> 0; return s / 4294967296; };
-}
-
 // Days since each block was last swum, from the saved log.
 export function recencyMap(history, date) {
   const map = {};
@@ -601,7 +594,9 @@ export function suggestPractice({ plan, library, date = todayISO(), history = []
   // Lead with the day's category, keep the hardest work before the technique.
   main.sort((a, b) => (spec.weights[b.category] - spec.weights[a.category]) || (b.intensity - a.intensity));
 
-  result.blocks = [warm, ...main, cool].filter(Boolean).map((b) => ({ ...b, circuit: false }));
+  // Ideas are written again for the day, unlike the last time they were swum.
+  const version = (b) => ideaVersion(b, { date, slot: theSlot, phaseName: pos.phase?.name, variant, last: lastVersion(history, b.id, date) });
+  result.blocks = [warm, ...main, cool].filter(Boolean).map((b) => ({ ...version(b), circuit: false }));
   if (!main.length) result.notes.push(`No ${FOCUSES[dayFocus].label.toLowerCase()} blocks fit in ${budget} minutes; add shorter ones or allow more time.`);
 
   // Blend the main set into a circuit on aerobic/technique days when the
@@ -760,7 +755,7 @@ export const composedGearYards = (composed) => composedYards(composed).byGear;
 // reads as timed), whether it was in the circuit, and `printed`: its lines
 // are the ones printed that day, so their send-offs are never re-timed.
 export function recordBlock(rb) {
-  return { ...makeBlock(rb), minutes: rb.measure === 'distance' ? null : rb.minutes, distance: rb.distance, circuit: !!rb.circuit, printed: true };
+  return { ...makeBlock(rb), minutes: rb.measure === 'distance' ? null : rb.minutes, distance: rb.distance, circuit: !!rb.circuit, printed: true, ...(rb.stage ? { stage: rb.stage } : {}) };
 }
 
 // A saved practice composed again as the builder composed it (rounds, round
@@ -801,6 +796,9 @@ export function shareLine(item, unit) {
   return line;
 }
 
+// A block's note lines (its phase's note, then its description), indented.
+const noteLines = (block, indent, withDetail) => blockNote(block, withDetail).split('\n').filter(Boolean).map((l) => `${indent}${l}`);
+
 // Plain text of a practice, for copying or printing. `renderLines(block,
 // share)` may return the set lines to print under a block (with interval
 // columns); by default a block's own lines are printed as written.
@@ -817,13 +815,13 @@ export function practiceText(composed, { title = '', date = '', focus = '', phas
     if (s2.type === 'block') {
       out.push(`${blockLine(s2.block, unit)}${s2.block.stroke !== 'choice' && !/\b(IM|FL|FR|BK|BR|free|back|breast|fly)\b/i.test(s2.block.name) ? ` (${STROKE_LABEL[s2.block.stroke]})` : ''}${s2.block.equipment.length ? ` — ${s2.block.equipment.join(', ')}` : ''}`);
       out.push(...linesOf(s2.block, null, '    '));
-      if (showDetail && s2.block.detail) out.push(`    ${s2.block.detail}`);
+      out.push(...noteLines(s2.block, '    ', showDetail));
     } else {
       out.push(`${s2.rounds} round${s2.rounds === 1 ? '' : 's'} of:${s2.pattern && s2.pattern !== 'even' ? ` (${PATTERNS[s2.pattern].label.toLowerCase()})` : ''}`);
       s2.items.forEach((it) => {
         out.push(`  • ${shareLine(it, unit)}${it.block.equipment.length ? ` — ${it.block.equipment.join(', ')}` : ''}`);
         out.push(...linesOf(it.block, it.shares[0], '      '));
-        if (showDetail && it.block.detail) out.push(`      ${it.block.detail}`);
+        out.push(...noteLines(it.block, '      ', showDetail));
       });
     }
   });
@@ -863,7 +861,7 @@ export function practiceRecord({ date, title, focus, slot = 'AM', position, bloc
     blocks: blocks.map((b) => ({
       id: b.id, name: b.name, category: b.category, stroke: b.stroke, circuit: !!b.circuit,
       gears: b.gears || [], lines: b.lines || [], source: b.source || '',
-      detail: b.detail || '', equipment: b.equipment || [],
+      detail: b.detail || '', equipment: b.equipment || [], ...(b.stage ? { stage: b.stage } : {}),
       minutes: sizes.get(b)?.minutes ?? null, distance: sizes.get(b)?.distance ?? null,
       measure: b.minutes ? 'time' : 'distance',
     })),

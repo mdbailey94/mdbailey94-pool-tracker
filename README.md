@@ -83,6 +83,12 @@ and the coach's own blocks, and learns from what happens on deck.
   headings and block headings, matches each block to the library by its lines or name, and lists what it
   found to review first — keep or replace practices the app already has, and add blocks it doesn't
   recognise to the library (with a guessed category). Filled-in sessions are marked as in the doc.
+- **Idea blocks.** A block can be saved as an idea rather than a fixed set: its description is the
+  mechanism, its lines one way to swim it, and a note for each phase of the season says what changes
+  (e.g. "P2: last 25% without the snorkel"). Each time it goes into a practice it is written fresh: reps,
+  distances and rounds split differently for about the same yards, unlike the last time it was swum,
+  with send-offs for each group, and the phase's note printed with it. "Another version" in Build
+  writes it again; the coach chat is told to vary it the same way.
 - **Today.** The day's sessions with a few questions (time, how the group is, equipment, focus) → a suggested
   practice with group send-off columns, notes from past debriefs and the CNS load.
 - **Coach.** In the claude.ai version of the page, a chat where the coach can text requests ("write today's
@@ -137,6 +143,7 @@ src/coach.js       prompts and replies for the coach chat (pure, tested)
 src/week.js        the week: session status, totals vs phase targets, drafts (pure, tested)
 src/gdoc.js        a session → Google Doc paragraphs and the batchUpdate that appends them (pure, tested)
 src/docscan.js     a week's Google Doc → the sessions and blocks written in it (pure, tested)
+src/ideas.js       idea blocks: a fresh version for each practice, the note for the phase (pure, tested)
 src/practice-store.js  storage: artifact database or localStorage
 src/pw/            Practice Writer UI (app shell, views/, shared rendering)
 scripts/build-artifact.mjs  builds the claude.ai Artifact version

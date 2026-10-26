@@ -40,6 +40,7 @@ How this coach writes a set:
 - Use the debriefs: intervals too hard or few made the send-offs -> more rest or slower send-offs; too easy -> tighten them; drills not working -> change the drill or the focus; a block rated bad -> change it or leave it out; keep what the coach said they changed. Say in "reply" what you took from the debriefs.
 - THIS WEEK shows each session's status (open, written, swum, debriefed), what is already written and the week's gear bands and kick against the phase targets. When writing a session or planning the rest of the week, steer what is still open toward the targets (more of a band that is under, less of one that is over), mind the CNS load before race-pace and speed days, and don't repeat a main set already written this week. To plan several sessions, answer in "reply" day by day (focus, main set, yards) and put any new sets in "blocks".
 - Follow the coach's style guide and reuse the shapes, phrasing and rounds of their library blocks.
+- A library block marked IDEA is a concept, not a fixed set: keep its mechanism (its description and the shape of its lines) but write a fresh version each time, with different reps, distances or rounds for about the same yards, and follow its note for the current phase.
 
 Reply with one JSON object only, no other text:
 {"reply": string, "practice": null | {"title": string, "slot": "AM" | "PM", "rounds": number, "pattern": ${Object.keys(PATTERNS).map((p) => `"${p}"`).join(' | ')}, "blocks": [Block]}, "blocks": [Block]}
@@ -158,7 +159,8 @@ function blockText(b, unit, maxLines) {
   const lines = (b.lines || []).slice(0, maxLines);
   const more = (b.lines || []).length - lines.length;
   const desc = b.detail ? [`(${lines.length ? 'description' : 'no lines; description'}: ${clip(b.detail, 200)})`] : [];
-  return [`## ${b.name} · ${meta}`, ...lines, ...(more > 0 ? [`(+${more} more lines)`] : []), ...desc].join('\n');
+  if (b.idea && b.stages) desc.push(`(by phase: ${Object.entries(b.stages).map(([p, t]) => `${p}: ${clip(t, 120)}`).join('; ')})`);
+  return [`## ${b.name}${b.idea ? ' · IDEA' : ''} · ${meta}`, ...lines, ...(more > 0 ? [`(+${more} more lines)`] : []), ...desc].join('\n');
 }
 
 function recordText(r, n) {

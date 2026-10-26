@@ -11,7 +11,7 @@ import { carryForward, VERDICTS } from '../../learn.js';
 import { blockSecondsByGroup, generateBlock } from '../../setlang.js';
 import { fmtClock } from '../../gears.js';
 import { blockLines, focusLabel, linesHTML, practiceHTML, practiceTextFor } from '../render.js';
-import { savedRecord } from '../load.js';
+import { savedRecord, versionFor } from '../load.js';
 import { updateDebriefDot } from '../app.js';
 import { addToDoc } from '../doc-card.js';
 
@@ -87,7 +87,7 @@ function blockRow(ctx, b, i, n, slot, open) {
   return `<div class="brow ${b.circuit ? 'in-circuit' : ''}">
     <div class="info">
       <button type="button" class="b-disc" data-lines="${esc(b.key)}" aria-expanded="${open}"><span class="b-caret" aria-hidden="true">${open ? '▾' : '▸'}</span>${esc(b.name)}</button>
-      <div class="meta">${esc(metaText(b, ctx.state.plan.unit))}${b.circuit ? ' <span class="badge circuit">circuit</span>' : ''}${last?.verdict ? ` <span class="badge">last: ${esc(VERDICTS[last.verdict].toLowerCase())}</span>` : ''}</div>
+      <div class="meta">${esc(metaText(b, ctx.state.plan.unit))}${b.circuit ? ' <span class="badge circuit">circuit</span>' : ''}${b.idea ? ' <span class="badge">idea</span>' : ''}${last?.verdict ? ` <span class="badge">last: ${esc(VERDICTS[last.verdict].toLowerCase())}</span>` : ''}</div>
       ${!open && b.detail ? `<div class="b-desc-peek">${esc(peek(b.detail))}</div>` : ''}
     </div>
     <div class="ctl">
@@ -97,7 +97,9 @@ function blockRow(ctx, b, i, n, slot, open) {
       <button type="button" class="icon-btn danger" data-rm="${i}" aria-label="Remove ${esc(b.name)}">✕</button>
     </div>
     ${open ? `<div class="b-lines">
+      ${b.stage ? `<p class="b-stage small">${esc(b.stage)}</p>` : ''}
       ${lines.length ? linesHTML(lines) : '<p class="muted small">No set lines written for this block yet. Add them in Blocks, or use Write a block.</p>'}
+      ${b.idea && libraryBlock(ctx, b) ? `<div class="actions c-tight"><button type="button" class="btn secondary small-btn" data-version="${esc(b.key)}">Another version</button><span class="muted small">An idea: written fresh for each practice.</span></div>` : ''}
       <label class="field b-desc">Description <span class="muted small">(prints under the block's heading)</span>
         <textarea data-desc="${esc(b.key)}" rows="2" placeholder="Cues, focus, what you want from this block today">${esc(b.detail || '')}</textarea></label>
       ${descActions(ctx, b)}
@@ -282,6 +284,19 @@ export function render(ctx, el) {
       rr();
     };
   });
+  $$('[data-version]', el).forEach((btn) => {
+    btn.onclick = () => {
+      const b = byKey(btn.dataset.version);
+      const lib = b && libraryBlock(ctx, b);
+      if (!lib) return;
+      ui.versions ||= {};
+      ui.versions[b.key] = (ui.versions[b.key] || 0) + 1;
+      const v = versionFor(ctx, draft, lib, ui.versions[b.key], b.lines);
+      b.lines = v.lines;
+      b.stage = v.stage;
+      rr();
+    };
+  });
   $$('[data-desc-reset]', el).forEach((btn) => {
     btn.onclick = () => {
       const b = byKey(btn.dataset.descReset);
@@ -298,7 +313,7 @@ export function render(ctx, el) {
 
   const addToDraft = (src) => {
     const circuit = !!(CATEGORIES[src.category]?.circuit && draft.blocks.some((b) => b.circuit));
-    const entry = { ...src, circuit, key: ctx.uid('k') };
+    const entry = { ...versionFor(ctx, draft, src), circuit, key: ctx.uid('k') };
     // Keep the cool-down last.
     const cool = draft.blocks.findIndex((b) => b.category === 'cooldown');
     if (cool >= 0 && src.category !== 'cooldown') draft.blocks.splice(cool, 0, entry); else draft.blocks.push(entry);

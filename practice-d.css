@@ -25,3 +25,9 @@
 .wk-scan-b { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; padding: 4px 0; }
 .wk-scan-b .field { margin: 0; flex: 1 1 220px; min-width: 0; }
 .wk-scan-b select { padding: 4px 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--text); font: inherit; font-size: 14px; }
+
+/* Idea blocks: the phase's note in Build, the switch and phase notes in the editor. */
+.b-stage { margin: 4px 0 6px; font-style: italic; color: var(--accent); }
+.bk-idea { margin-top: 4px; }
+.bk-idea p { margin: 2px 0 8px; }
+.bk-stages .eyebrow { margin-bottom: 4px; }

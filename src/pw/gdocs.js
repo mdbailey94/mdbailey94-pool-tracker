@@ -6,6 +6,7 @@
 
 import { CATEGORIES, recordComposed, shareLine, weekdayIndex } from '../practice.js';
 import { appendRequests, docEnd, sessionParagraphs } from '../gdoc.js';
+import { blockNote } from '../ideas.js';
 import { blockLines, circuitLines } from './render.js';
 
 export const DRIVE = 'Google Drive';
@@ -81,8 +82,9 @@ function bareName(b) {
 export function recordSections(record, ctx) {
   const composed = recordComposed(record, ctx.state.plan);
   const unit = composed.unit;
-  // Descriptions go in when the coach shows them (Build's "Show block descriptions").
-  const desc = (b) => (ctx.state.prefs?.showDetail === false ? '' : String(b.detail || '').trim());
+  // Descriptions go in when the coach shows them (Build's "Show block
+  // descriptions"); an idea's note for the phase always does.
+  const desc = (b) => blockNote(b, ctx.state.prefs?.showDetail !== false);
   return composed.sections.map((s) => {
     if (s.type === 'block') {
       const lines = blockLines(s.block, ctx, null, record.slot || 'AM');

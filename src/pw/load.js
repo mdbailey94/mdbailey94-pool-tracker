@@ -6,7 +6,8 @@
 // the coach chat's week all count it this way, so a practice shows the same
 // points in Build, on Today, on the Week and in what the coach is told.
 
-import { addDays, makeBlock, practiceRecord, recordBlock, retimes } from '../practice.js';
+import { addDays, makeBlock, planPosition, practiceRecord, recordBlock, retimes } from '../practice.js';
+import { ideaVersion, lastVersion } from '../ideas.js';
 import { cnsResidual } from '../gears.js';
 import { cnsTimeline, recordLoad, slotHour } from '../week.js';
 import { blockLines } from './render.js';
@@ -43,6 +44,19 @@ export function savedRecord(ctx, fields) {
   return rec;
 }
 
+// A library block as it goes into a practice (draft: { date, slot }): an
+// idea written for the day (src/ideas.js), unlike `last` (else the last
+// time it was swum); any other block as it is.
+export function versionFor(ctx, draft, src, variant = 0, last = null) {
+  if (!src?.idea) return src;
+  const { plan, log, today } = ctx.state;
+  const date = draft.date || today;
+  return ideaVersion(src, {
+    date, slot: draft.slot || 'AM', phaseName: planPosition(plan, date).phase?.name, variant,
+    last: last || lastVersion(log, src.id, date),
+  });
+}
+
 // A saved practice's block back in the builder: the library block when it
 // still exists (its lines as they are now) with the description written for
 // that practice, else the saved copy as a library block again (recordBlock,
@@ -50,7 +64,8 @@ export function savedRecord(ctx, fields) {
 // builder writes its send-offs again). `missing` when the library lost it.
 export function draftBlock(ctx, rb) {
   const lib = ctx.state.blocks.find((x) => x.id === rb.id);
-  const base = lib || makeBlock(recordBlock(rb));
+  // An idea keeps the version written for that practice.
+  const base = lib?.idea ? { ...lib, lines: rb.lines || [], stage: rb.stage || '', printed: true } : lib || makeBlock(recordBlock(rb));
   const detail = typeof rb.detail === 'string' ? { detail: rb.detail } : {};
   return { block: { ...base, ...detail, circuit: !!rb.circuit, key: ctx.uid('k') }, missing: !lib };
 }

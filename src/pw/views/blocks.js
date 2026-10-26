@@ -10,6 +10,8 @@ import { DEFAULT_GEAR_MODEL, fmtClock } from '../../gears.js';
 import { blockCns, blockSecondsByGroup, generateBlock, parseSet, quickBlock, setDistance, setGears, writeLines } from '../../setlang.js';
 import { exportAll, importAll, loadAll } from '../../practice-store.js';
 import { blockLines, linesHTML } from '../render.js';
+import { versionFor } from '../load.js';
+import { ideaVersion, phaseKey } from '../../ideas.js';
 import { updateDebriefDot } from '../app.js';
 
 const OWN = ['coach', 'pasted', 'drive', 'claude'];
@@ -127,7 +129,7 @@ function bindPaste(ctx, el, ui) {
 // ---------------------------------------------------------------- library
 
 // What the search box matches: name, description, category and lines.
-const searchText = (b) => [b.name, b.detail, catLabel(b.category), STROKE_LABEL[b.stroke], ...(b.lines || [])].join(' ').toLowerCase();
+const searchText = (b) => [b.name, b.detail, b.idea ? 'idea' : '', ...Object.values(b.stages || {}), catLabel(b.category), STROKE_LABEL[b.stroke], ...(b.lines || [])].join(' ').toLowerCase();
 const matches = (b, q) => !q || q.split(/\s+/).every((w) => searchText(b).includes(w));
 
 function libraryHTML(ctx, ui) {
@@ -185,7 +187,7 @@ function rowHTML(ctx, b, unit, open, flash, hidden = false, ui = {}) {
   const desc = ui.desc?.[b.id] ?? b.detail ?? '';
   return `<div class="brow c-row ${flash ? 'c-flash' : ''}" data-row="${esc(b.id)}" ${hidden ? 'hidden' : ''}>
     <button type="button" class="c-disc" data-open="${esc(b.id)}" aria-expanded="${open}" aria-label="${open ? 'Hide' : 'Show'} the lines of ${esc(b.name)}">${open ? '▾' : '▸'}</button>
-    <div class="info"><div class="name">${esc(b.name)}</div><div class="meta">${esc(meta)}</div>
+    <div class="info"><div class="name">${esc(b.name)}${b.idea ? ' <span class="badge">idea</span>' : ''}</div><div class="meta">${esc(meta)}</div>
       ${!open && b.detail ? `<div class="b-desc-peek">${esc(b.detail.split('\n')[0].slice(0, 120))}</div>` : ''}</div>
     <div class="ctl">
       <button type="button" class="icon-btn" data-add="${esc(b.id)}" title="Add to the practice being built" aria-label="Add ${esc(b.name)} to the practice">＋</button>
@@ -254,7 +256,7 @@ function bindLibrary(ctx, el, ui) {
 function addToDraft(ctx, src) {
   const d = ctx.state.draft;
   d.blocks ||= [];
-  const entry = { ...src, circuit: false, key: ctx.uid('k') };
+  const entry = { ...versionFor(ctx, d, src), circuit: false, key: ctx.uid('k') };
   const cool = d.blocks.findIndex((b) => b.category === 'cooldown');
   if (cool >= 0 && src.category !== 'cooldown') d.blocks.splice(cool, 0, entry); else d.blocks.push(entry);
   ctx.toast(`Added ${src.name} to the ${d.slot === 'PM' ? 'PM' : 'AM'} practice (${d.blocks.length} block${d.blocks.length === 1 ? '' : 's'})`);
@@ -285,6 +287,9 @@ function formFor(ctx, ui) {
     equipment: [...b.equipment],
     lines: b.lines.join('\n'),
     detail: b.detail,
+    idea: !!b.idea,
+    stages: { ...(b.stages || {}) },
+    version: 0,
     source: b.source || '',
     origLines: b.lines.join('\n'),
     generatedLines: null,
@@ -319,7 +324,8 @@ function editorHTML(ctx, f) {
       <button type="button" class="btn secondary" id="bk-write">${f.lines.trim() ? 'Write new lines for me' : 'Write lines for me'}</button>
     </div>
     <div id="bk-lines-preview">${linesPreview(ctx, f)}</div>
-    <label class="field">Description <span class="muted small">(prints under the block's heading; each practice can change it)</span><textarea data-f="detail" rows="3" placeholder="What to watch for, cues, why this block">${esc(f.detail)}</textarea></label>
+    <label class="field">${f.idea ? 'The idea' : 'Description'} <span class="muted small">(prints under the block's heading; each practice can change it)</span><textarea data-f="detail" rows="3" placeholder="${f.idea ? 'e.g. Fly with socks, mixed in with other focuses' : 'What to watch for, cues, why this block'}">${esc(f.detail)}</textarea></label>
+    ${ideaHTML(ctx, f)}
     <p class="form-error" id="bk-err" hidden></p>
     <div class="actions">
       <button type="button" class="btn" id="bk-save">${ctx.state.ui.blocks.returnTo === 'build' ? 'Save and add to practice' : 'Save block'}</button>
@@ -332,21 +338,44 @@ function editorHTML(ctx, f) {
 
 const formLines = (f) => f.lines.split('\n');
 
+// An idea: the switch, and what changes in each phase of the plan (plus
+// notes kept for phase names the plan no longer has).
+function ideaHTML(ctx, f) {
+  const { esc, state } = ctx;
+  const phases = state.plan.phases.map((p) => p.name);
+  const keys = new Set(phases.map(phaseKey));
+  const names = [...phases.filter((n, i) => phases.findIndex((x) => phaseKey(x) === phaseKey(n)) === i),
+    ...Object.keys(f.stages).filter((n) => !keys.has(phaseKey(n)))];
+  const value = (n) => f.stages[Object.keys(f.stages).find((k) => phaseKey(k) === phaseKey(n)) ?? n] || '';
+  return `<div class="field bk-idea">
+    <label class="field inline"><input type="checkbox" id="bk-idea" ${f.idea ? 'checked' : ''}> <b>An idea, not a fixed set</b></label>
+    <p class="muted small">Written fresh for each practice: the reps, distances and rounds split differently with about the same yards, unlike the last time it was swum, with send-offs for each group.${f.idea ? ' The lines above are one way to swim it.' : ''}</p>
+    ${f.idea ? `<div class="bk-stages">
+      <div class="eyebrow">By phase <span class="muted small">(prints with the block in that phase)</span></div>
+      ${names.length ? names.map((n) => `<label class="field">${esc(n)}${keys.has(phaseKey(n)) ? '' : ' <span class="muted small">(not in the plan now)</span>'}
+        <input type="text" data-stage="${esc(n)}" value="${esc(value(n))}" placeholder="What changes in ${esc(n)}" autocomplete="off"></label>`).join('')
+        : '<p class="muted small">Add the season’s phases in Season to write what changes in each.</p>'}
+    </div>` : ''}
+  </div>`;
+}
+
 function linesPreview(ctx, f) {
   const { esc } = ctx;
   const raw = formLines(f).filter((l) => l.trim());
   if (!raw.length) return '<p class="muted small">No lines yet: the block prints its name and notes only.</p>';
   const wctx = ctx.learned.writing;
+  const shown = f.idea ? ideaVersion({ id: f.id || 'new', idea: true, lines: formLines(f) }, { date: ctx.state.today, variant: f.version }).lines : formLines(f);
   let lines;
-  try { lines = writeLines(formLines(f), wctx, { single: f.session === 'PM', retimeAll: f.source === 'generated' && f.lines === f.origLines }); } catch (e) { console.error(e); return '<p class="form-error">Those lines could not be read.</p>'; }
+  try { lines = writeLines(shown, wctx, { single: f.session === 'PM', retimeAll: f.source === 'generated' && f.lines === f.origLines }); } catch (e) { console.error(e); return '<p class="form-error">Those lines could not be read.</p>'; }
   const parsed = parseSet(lines.join('\n'));
   const times = groupTimes(formLines(f), wctx);
   const cns = blockCns(lines, wctx.model);
   const dist = setDistance(parsed);
   const gears = setGears(parsed);
   return `<div class="c-preview">
-    <div class="eyebrow">As it will print</div>
+    <div class="eyebrow">${f.idea ? 'One version' : 'As it will print'}</div>
     ${linesHTML(lines)}
+    ${f.idea ? '<div class="actions c-tight"><button type="button" class="btn secondary small-btn" id="bk-version">Another version</button></div>' : ''}
     ${times ? `<div class="c-times"><span>Time per group</span><b>${esc(times)}</b></div><div class="muted small">${esc(groupNames(wctx))}</div>` : ''}
     <div class="metrics"><span>Distance <b>${dist}${esc(wctx.unit)}</b></span><span>CNS load <b>${cns}</b></span>${gears.length ? `<span>Gears <b>${esc(gears.join(' '))}</b></span>` : ''}</div>
   </div>`;
@@ -356,7 +385,16 @@ function bindEditor(ctx, el, ui) {
   const { $, $$, state } = ctx;
   const f = ui.form;
   const form = $('#bk-form', el);
-  const refreshPreview = () => { $('#bk-lines-preview', el).innerHTML = linesPreview(ctx, f); };
+  // The preview is redrawn in place, with its "Another version" button.
+  const refreshPreview = () => {
+    $('#bk-lines-preview', el).innerHTML = linesPreview(ctx, f);
+    bindVersion();
+  };
+  const bindVersion = () => {
+    const btn = $('#bk-version', el);
+    if (btn) btn.onclick = () => { f.version += 1; refreshPreview(); };
+  };
+  bindVersion();
   $$('[data-f]', form).forEach((input) => {
     const key = input.dataset.f;
     input.addEventListener('input', () => {
@@ -378,6 +416,14 @@ function bindEditor(ctx, el, ui) {
       const k = c.dataset.eq;
       f.equipment = f.equipment.includes(k) ? f.equipment.filter((x) => x !== k) : [...f.equipment, k];
       c.classList.toggle('on'); c.setAttribute('aria-pressed', String(f.equipment.includes(k)));
+    };
+  });
+
+  $('#bk-idea', el).onchange = (e) => { f.idea = e.target.checked; ctx.rerender(); };
+  $$('[data-stage]', form).forEach((input) => {
+    input.oninput = () => {
+      const k = Object.keys(f.stages).find((x) => phaseKey(x) === phaseKey(input.dataset.stage)) ?? input.dataset.stage;
+      f.stages[k] = input.value;
     };
   });
 
@@ -433,6 +479,7 @@ function bindEditor(ctx, el, ui) {
       id: f.id || undefined, name: f.name, category: f.category, stroke: f.stroke,
       minutes: f.measure === 'minutes' ? amount : null, distance: f.measure === 'distance' ? amount : null,
       intensity: +f.intensity, session: f.session, gears, equipment: f.equipment, lines, detail: f.detail, source,
+      idea: f.idea, stages: f.stages,
     });
     // Not saved: the app says so and offers Try again; the editor stays open
     // with the edits, and saving again replaces this block (a new one too).
