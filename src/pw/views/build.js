@@ -57,7 +57,7 @@ function planLine(ctx, draft, { day, session }) {
 const strokeTag = (b) => (b.stroke && b.stroke !== 'choice' ? STROKE_LABEL[b.stroke] : '');
 
 function metaText(b, unit) {
-  return [measureText(b, unit), strokeTag(b), CATEGORIES[b.category]?.label, b.gears?.length ? b.gears.join(' ') : '', b.equipment?.length ? b.equipment.join(', ') : '', b.session && b.session !== 'any' ? `${b.session} only` : '']
+  return [measureText(b, unit), strokeTag(b), [CATEGORIES[b.category]?.label, b.sub].filter(Boolean).join(' / '), b.gears?.length ? b.gears.join(' ') : '', b.equipment?.length ? b.equipment.join(', ') : '', b.session && b.session !== 'any' ? `${b.session} only` : '']
     .filter(Boolean).join(' · ');
 }
 

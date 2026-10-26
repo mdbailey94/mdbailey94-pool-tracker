@@ -82,7 +82,11 @@ and the coach's own blocks, and learns from what happens on deck.
   "Fill in from the doc" on the Week card reads a doc the coach already wrote into: it finds the day
   headings and block headings, matches each block to the library by its lines or name, and lists what it
   found to review first — keep or replace practices the app already has, and add blocks it doesn't
-  recognise to the library (with a guessed category). Filled-in sessions are marked as in the doc.
+  recognise to the library (with a guessed category, a name and an optional sub-category). A bold line
+  taken for a new block by mistake can be joined back to the block above. Filled-in sessions are marked
+  as in the doc.
+- **Sub-categories.** A block can carry its own label within its category ("Socks", "Underwater"); the
+  library groups each category by it, search finds it, and the coach chat sees it.
 - **Idea blocks.** A block can be saved as an idea rather than a fixed set: its description is the
   mechanism, its lines one way to swim it, and a note for each phase of the season says what changes
   (e.g. "P2: last 25% without the snorkel"). Each time it goes into a practice it is written fresh: reps,

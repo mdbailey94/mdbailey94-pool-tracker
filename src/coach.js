@@ -155,7 +155,7 @@ export function relevantBlocks(blocks, { focuses = [], slot = null, weights = {}
 }
 
 function blockText(b, unit, maxLines) {
-  const meta = [measureText(b, unit), b.category, b.stroke !== 'choice' ? b.stroke : '', b.gears?.length ? b.gears.join(' ') : '', b.session && b.session !== 'any' ? b.session : '', b.equipment?.length ? `kit: ${b.equipment.join(', ')}` : ''].filter(Boolean).join(' · ');
+  const meta = [measureText(b, unit), b.sub ? `${b.category}/${b.sub}` : b.category, b.stroke !== 'choice' ? b.stroke : '', b.gears?.length ? b.gears.join(' ') : '', b.session && b.session !== 'any' ? b.session : '', b.equipment?.length ? `kit: ${b.equipment.join(', ')}` : ''].filter(Boolean).join(' · ');
   const lines = (b.lines || []).slice(0, maxLines);
   const more = (b.lines || []).length - lines.length;
   const desc = b.detail ? [`(${lines.length ? 'description' : 'no lines; description'}: ${clip(b.detail, 200)})`] : [];

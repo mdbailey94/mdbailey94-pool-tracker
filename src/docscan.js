@@ -79,8 +79,8 @@ export function docSessions(doc, monday) {
   const out = [];
   let session = null;
   let block = null;
-  const startBlock = (head) => {
-    block = { name: head.name, minutes: head.minutes, extra: head.extra, lines: [] };
+  const startBlock = (head, text = '') => {
+    block = { name: head.name, minutes: head.minutes, extra: head.extra, head: text, lines: [] };
     session.blocks.push(block);
   };
   for (const p of docParagraphs(doc)) {
@@ -92,7 +92,7 @@ export function docSessions(doc, monday) {
       continue;
     }
     if (!session || !p.text.trim()) continue;
-    if (isHeading(p)) { startBlock(headingOf(p.text)); continue; }
+    if (isHeading(p)) { startBlock(headingOf(p.text), setLine(p.text).trim()); continue; }
     if (!block && !session.blocks.length && !p.bold && !parseLine(setLine(p.text)).intervals?.length && parseLine(setLine(p.text)).type !== 'swim') {
       session.note.push(p.text.trim());
       continue;
@@ -111,6 +111,24 @@ export function docSessions(doc, monday) {
     if (done.blocks.length) sessions.push(done);
   }
   return sessions;
+}
+
+// A session's blocks with some joined to the one above (`joined`: the
+// indexes to join), for a heading the scan took for a new block by mistake.
+// A joined block's heading stays in the lines, as the doc has it; minutes
+// add up when both parts have them, else the first's stay. Each block
+// lists its `parts` (indexes).
+export function joinBlocks(blocks, joined = new Set()) {
+  const out = [];
+  blocks.forEach((b, i) => {
+    const into = i > 0 && joined.has(i) ? out.at(-1) : null;
+    if (!into) { out.push({ ...b, lines: [...b.lines], parts: [i] }); return; }
+    into.lines.push(...(b.head ? [b.head] : []), ...b.lines);
+    into.minutes = into.minutes && b.minutes ? into.minutes + b.minutes : into.minutes || null;
+    into.extra = [into.extra, b.extra].filter(Boolean).join(', ');
+    into.parts.push(i);
+  });
+  return out;
 }
 
 // A name as compared across the doc and the library: no "N min", case,

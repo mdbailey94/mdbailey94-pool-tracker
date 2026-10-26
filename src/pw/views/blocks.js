@@ -4,7 +4,7 @@
 // your style; back up and restore everything.
 
 import {
-  CATEGORIES, EQUIPMENT, INTENSITY, STROKES, STROKE_LABEL, blockDistance, blockMinutes, makeBlock, measureText, starterBlocks,
+  CATEGORIES, EQUIPMENT, INTENSITY, STROKES, STROKE_LABEL, blockDistance, blockMinutes, makeBlock, measureText, starterBlocks, subCategories,
 } from '../../practice.js';
 import { DEFAULT_GEAR_MODEL, fmtClock } from '../../gears.js';
 import { blockCns, blockSecondsByGroup, generateBlock, parseSet, quickBlock, setDistance, setGears, writeLines } from '../../setlang.js';
@@ -128,9 +128,25 @@ function bindPaste(ctx, el, ui) {
 
 // ---------------------------------------------------------------- library
 
-// What the search box matches: name, description, category and lines.
-const searchText = (b) => [b.name, b.detail, b.idea ? 'idea' : '', ...Object.values(b.stages || {}), catLabel(b.category), STROKE_LABEL[b.stroke], ...(b.lines || [])].join(' ').toLowerCase();
+// What the search box matches: name, sub-category, description, category and lines.
+const searchText = (b) => [b.name, b.sub, b.detail, b.idea ? 'idea' : '', ...Object.values(b.stages || {}), catLabel(b.category), STROKE_LABEL[b.stroke], ...(b.lines || [])].join(' ').toLowerCase();
 const matches = (b, q) => !q || q.split(/\s+/).every((w) => searchText(b).includes(w));
+
+// A category's blocks by sub-category: those without one first, then each
+// sub-category A–Z (written as its first block has it).
+function bySub(list) {
+  const out = new Map([['', []]]);
+  const names = new Map();
+  for (const b of list) {
+    const k = (b.sub || '').toLowerCase();
+    if (!names.has(k)) names.set(k, b.sub || '');
+    if (!out.has(k)) out.set(k, []);
+    out.get(k).push(b);
+  }
+  return [...out.entries()].filter(([, rows]) => rows.length)
+    .sort(([a], [b]) => (a === '' ? -1 : b === '' ? 1 : a.localeCompare(b)))
+    .map(([k, rows]) => [names.get(k), rows]);
+}
 
 function libraryHTML(ctx, ui) {
   const { state, esc } = ctx;
@@ -149,7 +165,8 @@ function libraryHTML(ctx, ui) {
     ${groups.length ? '' : `<p class="muted">${state.blocks.length ? 'Every block has a description.' : 'No blocks yet. Paste a set above or restore the starter blocks below.'}</p>`}
     ${groups.map(([c, list]) => `<div class="bk-group" data-group="${esc(c)}">
       <div class="group-title">${esc(catLabel(c))}</div>
-      <div class="rows">${list.map((b) => rowHTML(ctx, b, unit, !!ui.open[b.id], ui.flash === b.id, !matches(b, q), ui)).join('')}</div></div>`).join('')}
+      ${bySub(list).map(([sub, rows]) => `<div class="bk-sub" ${rows.some((b) => matches(b, q)) ? '' : 'hidden'}>${sub ? `<div class="sub-title">${esc(sub)}</div>` : ''}
+      <div class="rows">${rows.map((b) => rowHTML(ctx, b, unit, !!ui.open[b.id], ui.flash === b.id, !matches(b, q), ui)).join('')}</div></div>`).join('')}</div>`).join('')}
     <p class="muted small" id="bk-none" ${groups.length && !groups.some(([, l]) => l.some((b) => matches(b, q))) ? '' : 'hidden'}>Nothing matches “${esc(ui.q || '')}”.</p>
   </section>`;
 }
@@ -167,6 +184,7 @@ function applySearch(ctx, el, ui) {
       row.hidden = !hit;
       if (hit) shown += 1;
     });
+    ctx.$$('.bk-sub', g).forEach((sub) => { sub.hidden = !ctx.$$('[data-row]', sub).some((row) => !row.hidden); });
     g.hidden = !shown;
     if (shown) any = true;
   });
@@ -287,6 +305,7 @@ function formFor(ctx, ui) {
     equipment: [...b.equipment],
     lines: b.lines.join('\n'),
     detail: b.detail,
+    sub: b.sub || '',
     idea: !!b.idea,
     stages: { ...(b.stages || {}) },
     version: 0,
@@ -306,6 +325,10 @@ function editorHTML(ctx, f) {
     <label class="field">Name<input type="text" data-f="name" value="${esc(f.name)}" placeholder="e.g. 36 min FL/free switch" autocomplete="off"></label>
     <div class="row">
       <label class="field">Category<select data-f="category">${Object.keys(CATEGORIES).map((c) => `<option value="${c}" ${f.category === c ? 'selected' : ''}>${esc(catLabel(c))}</option>`).join('')}</select></label>
+      <label class="field">Sub-category <span class="muted small">(optional)</span><input type="text" data-f="sub" value="${esc(f.sub)}" list="bk-subs" placeholder="e.g. Socks, Underwater" autocomplete="off" maxlength="40">
+        <datalist id="bk-subs">${subCategories(state.blocks, f.category).map((x) => `<option value="${esc(x)}"></option>`).join('')}</datalist></label>
+    </div>
+    <div class="row">
       <label class="field">Stroke<select data-f="stroke">${STROKES.map((s) => `<option value="${s}" ${f.stroke === s ? 'selected' : ''}>${esc(STROKE_LABEL[s])}</option>`).join('')}</select></label>
     </div>
     <div class="grid3">
@@ -479,7 +502,7 @@ function bindEditor(ctx, el, ui) {
       id: f.id || undefined, name: f.name, category: f.category, stroke: f.stroke,
       minutes: f.measure === 'minutes' ? amount : null, distance: f.measure === 'distance' ? amount : null,
       intensity: +f.intensity, session: f.session, gears, equipment: f.equipment, lines, detail: f.detail, source,
-      idea: f.idea, stages: f.stages,
+      sub: f.sub, idea: f.idea, stages: f.stages,
     });
     // Not saved: the app says so and offers Try again; the editor stays open
     // with the edits, and saving again replaces this block (a new one too).

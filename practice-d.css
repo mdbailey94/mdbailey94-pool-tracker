@@ -31,3 +31,10 @@
 .bk-idea { margin-top: 4px; }
 .bk-idea p { margin: 2px 0 8px; }
 .bk-stages .eyebrow { margin-bottom: 4px; }
+
+/* Sub-categories in the library; joining blocks and labelling new ones in a doc scan. */
+.bk-sub .sub-title { margin: 10px 0 4px; font-size: 13px; font-weight: 600; color: var(--muted); }
+.wk-scan-blocks li.is-joined { padding-left: 12px; }
+.wk-scan-blocks li .small-btn { margin-left: auto; }
+.wk-scan-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; margin: 4px 0 10px; }
+.wk-scan-fields .field { margin: 0; }

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { blockFromDoc, dayOf, docSessions, headingOf, matchBlock, nameKey, scanPlan } from '../src/docscan.js';
-import { makeBlock } from '../src/practice.js';
+import { blockFromDoc, dayOf, docSessions, headingOf, joinBlocks, matchBlock, nameKey, scanPlan } from '../src/docscan.js';
+import { makeBlock, subCategories } from '../src/practice.js';
 
 // A made-up week doc: paragraphs as documents.get returns them.
 const para = (text, { bold = false, underline = false } = {}) => ({ paragraph: { elements: [{ textRun: { content: `${text}\n`, textStyle: { ...(bold ? { bold } : {}), ...(underline ? { underline } : {}) } } }] } });
@@ -77,4 +77,34 @@ test('blocks are matched to the library by lines, then by name; new ones get a c
 test('"WU" and "WD" headings are warm-ups and cool-downs', () => {
   assert.equal(blockFromDoc({ name: 'WU', minutes: 20, extra: '', lines: ['300 easy', '4 x 50 drill / swim   1:00'] }).category, 'warmup');
   assert.equal(blockFromDoc({ name: 'WD', minutes: 10, extra: '', lines: ['200 easy'] }).category, 'cooldown');
+});
+
+test('a block split in two by mistake is joined back, its heading kept as a line', () => {
+  const blocks = [
+    { name: 'Main', minutes: 30, extra: '', head: 'Main - 30 min', lines: ['3 x 200 free'] },
+    { name: 'Second half', minutes: null, extra: 'fins', head: 'Second half', lines: ['6 x 50 kick'] },
+    { name: 'Kick', minutes: 10, extra: '', head: 'Kick - 10 min', lines: ['200 kick'] },
+  ];
+  assert.deepEqual(joinBlocks(blocks).map((b) => b.parts), [[0], [1], [2]]);
+  const [one, two] = joinBlocks(blocks, new Set([1]));
+  assert.deepEqual(one.lines, ['3 x 200 free', 'Second half', '6 x 50 kick']);
+  assert.equal(one.minutes, 30);
+  assert.equal(one.extra, 'fins');
+  assert.deepEqual(one.parts, [0, 1]);
+  assert.deepEqual(two.parts, [2]);
+  const all = joinBlocks(blocks, new Set([1, 2]));
+  assert.equal(all.length, 1);
+  assert.equal(all[0].minutes, 40);
+  assert.equal(joinBlocks(blocks, new Set([0])).length, 3); // nothing above the first
+  assert.equal(blocks[0].lines.length, 1); // the scanned blocks are left as they were
+  // Headings are kept for joining.
+  assert.equal(docSessions(WEEK, '2026-10-26')[0].blocks[1].head, 'Threshold - 30 min');
+});
+
+test('blocks carry an optional sub-category', () => {
+  assert.equal(makeBlock({ name: 'A', sub: '  Socks  ' }).sub, 'Socks');
+  assert.equal(makeBlock({ name: 'A', sub: ' ' }).sub, undefined);
+  const lib = [makeBlock({ name: 'A', category: 'kick', sub: 'Socks' }), makeBlock({ name: 'B', category: 'kick', sub: 'socks' }), makeBlock({ name: 'C', category: 'speed', sub: 'Blocks' })];
+  assert.deepEqual(subCategories(lib), ['Blocks', 'Socks']);
+  assert.deepEqual(subCategories(lib, 'kick'), ['Socks']);
 });

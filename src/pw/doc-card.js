@@ -4,9 +4,9 @@
 // on load. Records remember the doc they went to (record.doc), so the card
 // can say what is still to add.
 
-import { CATEGORIES, addDays, composePractice, dayLabel, longDate, makeBlock, mondayOf, planPosition, sessionsOn } from '../practice.js';
+import { CATEGORIES, addDays, composePractice, dayLabel, longDate, makeBlock, mondayOf, planPosition, sessionsOn, subCategories } from '../practice.js';
 import { docIdFrom, weekDocTitle } from '../gdoc.js';
-import { blockFromDoc, docSessions, nameKey, scanPlan } from '../docscan.js';
+import { blockFromDoc, docSessions, joinBlocks, matchBlock, nameKey, scanPlan } from '../docscan.js';
 import { appendRecords, connectors, createDoc, docInfo, docsErrorText, DRIVE, findDocs, outcomeUnknown, readDoc } from './gdocs.js';
 import { practiceTextFor } from './render.js';
 import { savedRecord } from './load.js';
@@ -264,20 +264,35 @@ export function bindDocCard(ctx, el, week) {
 // is saved until the coach presses Fill in. Practices filled in are marked
 // as in the doc, so "Add to the doc" never writes them a second time.
 
-let scan = null; // { monday, docId, sessions, pick: { key: 'add'|'skip'|'replace' }, lib: { key: { add, category } } }
+let scan = null; // { monday, docId, sessions, pick: { key: 'add'|'skip'|'replace' }, join: { 'key#i': true }, lib: { key: { add, category, name, sub } } }
 let scanBusy = false;
 const sessionKey = (s) => `${s.date}|${s.slot}`;
 const blockKey = (b) => `${nameKey(b.name)}|${b.lines.join('\n')}`;
 
+// The sessions as the coach has them: blocks joined to the one above where
+// asked (a heading the scan split on by mistake), each matched to the library.
+function sessionsOf(ctx, sc) {
+  return sc.sessions.map((s) => {
+    const k = `${sessionKey(s)}#`;
+    const joined = new Set(Object.keys(sc.join).filter((x) => sc.join[x] && x.startsWith(k)).map((x) => +x.slice(k.length)));
+    const blocks = joinBlocks(s.blocks, joined).map((b) => ({ ...b, match: b.parts.length > 1 ? matchBlock(b, ctx.state.blocks) : s.blocks[b.parts[0]].match }));
+    return { ...s, raw: s.blocks, blocks };
+  });
+}
+
 // The blocks of the picked sessions that aren't in the library, once each.
-function newBlocks(sc) {
+function newBlocks(sc, sessions) {
   const out = new Map();
-  for (const s of sc.sessions) {
+  for (const s of sessions) {
     if (sc.pick[sessionKey(s)] === 'skip') continue;
     for (const b of s.blocks) if (!b.match && !out.has(blockKey(b))) out.set(blockKey(b), b);
   }
   return [...out.entries()];
 }
+
+// Join a block to the one above (one block in the doc split in two by a
+// bold line read as a heading), or separate it again.
+const joinButton = (ctx, k, i, joined) => `<button type="button" class="btn secondary small-btn" data-scan-join="${ctx.esc(`${k}#${i}`)}" aria-pressed="${joined}">${joined ? 'Separate' : 'Join to above'}</button>`;
 
 function scanHTML(ctx, sc) {
   const { esc } = ctx;
@@ -285,7 +300,8 @@ function scanHTML(ctx, sc) {
     return `<div class="wk-scan"><p class="small">Nothing written for this week in the doc yet (it reads day headings like “Tuesday” or “Tuesday PM” and the blocks under them).</p>
       <div class="actions"><button type="button" class="btn secondary small-btn" id="scan-cancel">Close</button></div></div>`;
   }
-  const rows = sc.sessions.map((s) => {
+  const sessions = sessionsOf(ctx, sc);
+  const rows = sessions.map((s) => {
     const k = sessionKey(s);
     const pick = sc.pick[k];
     const fromDoc = s.existing?.doc?.id === sc.docId;
@@ -295,17 +311,26 @@ function scanHTML(ctx, sc) {
           <option value="skip" ${pick === 'skip' ? 'selected' : ''}>${fromDoc ? 'Already filled in from the doc: keep' : 'Keep the practice already in the app'}</option>
           <option value="replace" ${pick === 'replace' ? 'selected' : ''}>Replace it with the doc's</option></select></label>`
         : `<label class="field inline small"><input type="checkbox" data-scan-pick="${esc(k)}" ${pick !== 'skip' ? 'checked' : ''}> Fill in</label>`}
-      <ul class="wk-scan-blocks">${s.blocks.map((b) => `<li><span>${esc(b.name)}${b.minutes ? ` · ${b.minutes} min` : ''}</span>${b.match ? `<span class="doc-tag">in your library${nameKey(b.match.name) === nameKey(b.name) ? '' : `: ${esc(b.match.name)}`}</span>` : '<span class="doc-tag new">new</span>'}</li>`).join('')}</ul>
+      <ul class="wk-scan-blocks">${s.blocks.map((b) => [
+        `<li><span>${esc(b.name)}${b.minutes ? ` · ${b.minutes} min` : ''}</span>${b.match ? `<span class="doc-tag">in your library${nameKey(b.match.name) === nameKey(b.name) ? '' : `: ${esc(b.match.name)}`}</span>` : '<span class="doc-tag new">new</span>'}${b.parts[0] > 0 ? joinButton(ctx, k, b.parts[0], false) : ''}</li>`,
+        ...b.parts.slice(1).map((i) => `<li class="is-joined"><span>+ ${esc(s.raw[i].name)} <span class="muted small">joined to the block above</span></span>${joinButton(ctx, k, i, true)}</li>`),
+      ].join('')).join('')}</ul>
     </div>`;
   }).join('');
-  const fresh = newBlocks(sc);
+  const fresh = newBlocks(sc, sessions);
+  const subs = subCategories(ctx.state.blocks);
   const lib = fresh.length ? `<div class="wk-scan-new">
       <p class="small"><b>${fresh.length === 1 ? 'This block isn\'t' : `These ${fresh.length} blocks aren't`} in your library.</b> Add ${fresh.length === 1 ? 'it' : 'them'} so ${fresh.length === 1 ? 'it' : 'they'} can be suggested and reused, and your style is learned from ${fresh.length === 1 ? 'it' : 'them'}:</p>
       ${fresh.map(([k, b]) => {
         const c = sc.lib[k] ||= { add: true, category: blockFromDoc(b, ctx.learned.writing).category };
         return `<div class="wk-scan-b"><label class="field inline small"><input type="checkbox" data-lib-add="${esc(k)}" ${c.add ? 'checked' : ''}> <b>${esc(b.name)}</b>${b.minutes ? ` · ${b.minutes} min` : ''} · ${b.lines.length} line${b.lines.length === 1 ? '' : 's'}</label>
-          <select data-lib-cat="${esc(k)}" aria-label="Category of ${esc(b.name)}" ${c.add ? '' : 'disabled'}>${Object.entries(CATEGORIES).map(([v, x]) => `<option value="${v}" ${c.category === v ? 'selected' : ''}>${esc(x.label)}</option>`).join('')}</select></div>`;
+          ${c.add ? `<div class="wk-scan-fields">
+            <label class="field small">Name<input type="text" data-lib-name="${esc(k)}" value="${esc(c.name ?? b.name)}" autocomplete="off"></label>
+            <label class="field small">Category<select data-lib-cat="${esc(k)}">${Object.entries(CATEGORIES).map(([v, x]) => `<option value="${v}" ${c.category === v ? 'selected' : ''}>${esc(x.label)}</option>`).join('')}</select></label>
+            <label class="field small">Sub-category<input type="text" data-lib-sub="${esc(k)}" value="${esc(c.sub || '')}" list="scan-subs" placeholder="optional" autocomplete="off"></label>
+          </div>` : ''}</div>`;
       }).join('')}
+      <datalist id="scan-subs">${subs.map((x) => `<option value="${esc(x)}"></option>`).join('')}</datalist>
     </div>` : '';
   const n = sc.sessions.filter((s) => sc.pick[sessionKey(s)] !== 'skip').length;
   return `<div class="wk-scan">
@@ -329,7 +354,7 @@ async function readWeek(ctx, week) {
   try {
     const raw = await readDoc(mcp, doc.id);
     const sessions = scanPlan(docSessions(raw, week.monday), { library: ctx.state.blocks, log: ctx.state.log });
-    scan = { monday: week.monday, docId: doc.id, sessions, lib: {}, pick: Object.fromEntries(sessions.map((s) => [sessionKey(s), s.existing ? 'skip' : 'add'])) };
+    scan = { monday: week.monday, docId: doc.id, sessions, lib: {}, join: {}, pick: Object.fromEntries(sessions.map((s) => [sessionKey(s), s.existing ? 'skip' : 'add'])) };
   } catch (e) {
     console.warn('Google Docs', e);
     ctx.toast(docsErrorText({ ...e, op: e?.op || 'read' }, e?.server || 'Google Docs'), { error: true });
@@ -351,21 +376,23 @@ async function fillIn(ctx) {
   let added = 0;
   try {
     const made = new Map();
-    for (const [k, b] of newBlocks(sc)) {
+    const sessions = sessionsOf(ctx, sc);
+    for (const [k, b] of newBlocks(sc, sessions)) {
       const c = sc.lib[k] || { add: true };
-      const block = makeBlock({ ...blockFromDoc(b, ctx.learned.writing), ...(c.category ? { category: c.category } : {}) });
+      const name = String(c.name ?? '').trim() || b.name;
+      const block = makeBlock({ ...blockFromDoc(b, ctx.learned.writing), name, sub: c.sub, ...(c.category ? { category: c.category } : {}) });
       if (c.add && (await ctx.save.block(block))) added += 1;
       made.set(k, block);
     }
     const at = Date.now();
-    for (const s of sc.sessions) {
+    for (const s of sessions) {
       const pick = sc.pick[sessionKey(s)];
       if (pick === 'skip') continue;
       // `printed`: the lines as the doc has them, send-offs and all, even
       // when they match a block the app wrote (which it would re-time).
       const blocks = s.blocks.map((b) => {
         const base = b.match || made.get(blockKey(b));
-        return { ...base, name: b.name, minutes: b.minutes || base.minutes || null, distance: b.minutes ? null : base.distance, lines: b.lines, detail: b.extra || base.detail || '', circuit: false, printed: true };
+        return { ...base, name: b.match ? b.name : base.name, minutes: b.minutes || base.minutes || null, distance: b.minutes ? null : base.distance, lines: b.lines, detail: b.extra || base.detail || '', circuit: false, printed: true };
       });
       const plan = state.plan;
       const composed = composePractice({ blocks, rounds: 1, pace: plan.pace, unit: plan.unit });
@@ -403,6 +430,15 @@ function bindScan(ctx, el, week) {
   });
   $$('[data-lib-add]', el).forEach((input) => {
     input.onchange = () => { (scan.lib[input.dataset.libAdd] ||= {}).add = input.checked; ctx.rerender(); };
+  });
+  $$('[data-lib-name]', el).forEach((input) => {
+    input.oninput = () => { (scan.lib[input.dataset.libName] ||= { add: true }).name = input.value; };
+  });
+  $$('[data-lib-sub]', el).forEach((input) => {
+    input.oninput = () => { (scan.lib[input.dataset.libSub] ||= { add: true }).sub = input.value; };
+  });
+  $$('[data-scan-join]', el).forEach((btn) => {
+    btn.onclick = () => { scan.join[btn.dataset.scanJoin] = !scan.join[btn.dataset.scanJoin]; ctx.rerender(); };
   });
   $$('[data-lib-cat]', el).forEach((select) => {
     select.onchange = () => { (scan.lib[select.dataset.libCat] ||= { add: true }).category = select.value; };

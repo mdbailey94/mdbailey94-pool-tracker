@@ -105,6 +105,9 @@ export function makeBlock(b) {
     lines: (Array.isArray(b.lines) ? b.lines : String(b.lines || '').split('\n')).map((l) => String(l).replace(/\s+$/, '')).filter((l, i, a) => l.trim() || (i > 0 && i < a.length - 1)),
     source: String(b.source || ''),
   };
+  // The coach's own label within the category ("Socks", "Underwater").
+  const sub = String(b.sub || '').replace(/\s+/g, ' ').trim().slice(0, 40);
+  if (sub) block.sub = sub;
   // An idea: written again each time it is used (src/ideas.js).
   if (b.idea) block.idea = true;
   const stages = normalStages(b.stages);
@@ -112,6 +115,17 @@ export function makeBlock(b) {
   if (!block.minutes && !block.distance) block.minutes = 10;
   if (block.minutes && block.distance) block.distance = null; // one measure only
   return block;
+}
+
+// The sub-categories in use (of one category, or all), as first written,
+// each once whatever its case, in A–Z order.
+export function subCategories(blocks, category = null) {
+  const seen = new Map();
+  for (const b of blocks || []) {
+    if (!b.sub || (category && b.category !== category)) continue;
+    if (!seen.has(b.sub.toLowerCase())) seen.set(b.sub.toLowerCase(), b.sub);
+  }
+  return [...seen.values()].sort((a, b) => a.localeCompare(b));
 }
 
 // Seconds per 100 for this block, including rest: the swimmer's planning pace
