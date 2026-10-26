@@ -104,7 +104,7 @@ function basicsHTML(ctx) {
   }).join('');
   const pace = fmtClock(plan.pace || 100);
   return `<section class="card" id="se-basics">
-    <h2>Season plan</h2>
+    <div class="c-head"><h2>Season plan</h2><button type="button" class="btn secondary small-btn" id="se-setup">Plan the season together</button></div>
     <p class="lead">Phases run back to back from the start; each says what every AM and PM session is for. Today and the coach work from here.</p>
     <div class="row">
       <label class="field">Season name<input type="text" data-f="name" value="${esc(plan.name)}"></label>
@@ -131,6 +131,7 @@ function bindBasics(ctx, el) {
   const { $, $$, state } = ctx;
   const plan = state.plan;
   const card = $('#se-basics', el);
+  $('#se-setup', card).onclick = () => { state.ui.setup = null; ctx.go('setup'); };
   $$('[data-f]', card).forEach((input) => {
     input.onchange = async () => {
       const k = input.dataset.f;
@@ -229,6 +230,7 @@ function phasesHTML(ctx) {
         <label class="field">Weeks<input type="number" data-f="p-weeks-${i}" min="1" max="30" inputmode="numeric" value="${p.weeks}"></label>
         <label class="field">Volume %<input type="number" data-f="p-volume-${i}" min="20" max="200" step="5" inputmode="numeric" value="${Math.round(p.volume * 100)}"></label>
       </div>
+      <label class="field">What this phase is for<textarea data-f="p-desc-${i}" rows="2" placeholder="e.g. Aerobic engine and kick; threshold once a week">${esc(p.description || '')}</textarea></label>
       <div class="c-row-label">AM focus</div>
       <div class="days">${WEEKDAYS.map((d, k) => `<div><label for="pf-am-${i}-${k}">${d}</label>${focusSelect(ctx, `p-am-${i}-${k}`, p.am[k], { off: !week[k].am }).replace('<select ', `<select id="pf-am-${i}-${k}" `)}</div>`).join('')}</div>
       <div class="c-row-label">PM focus (doubles)</div>
@@ -285,6 +287,7 @@ function bindPhases(ctx, el) {
       if (key === 'name') p.name = input.value.trim() || 'Phase';
       else if (key === 'weeks') p.weeks = Math.min(52, Math.max(1, Math.round(+input.value) || 1));
       else if (key === 'volume') p.volume = Math.min(2, Math.max(0.2, (+input.value || 100) / 100));
+      else if (key === 'desc') { const t = input.value.trim(); if (t) p.description = t; else delete p.description; }
       else if (key === 'am') p.am[+k] = input.value;
       else if (key === 'pm') p.pm[+k] = input.value || null;
       else if (key === 'tgt') {

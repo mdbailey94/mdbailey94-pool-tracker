@@ -2,7 +2,7 @@
 // shared context every view renders with. Views live in ./views/*.js and
 // export render(ctx).
 
-import { byDateDesc, todayISO, uid } from '../practice.js';
+import { byDateDesc, setupDone, todayISO, uid } from '../practice.js';
 import { blockScores, intervalCalibration, withTiming } from '../learn.js';
 import { learnStyle, writingContext } from '../setlang.js';
 import { canon, journaling, loadAll, localBackend, openStore, replayJournal } from '../practice-store.js';
@@ -15,8 +15,11 @@ import * as debrief from './views/debrief.js';
 import * as blocks from './views/blocks.js';
 import * as season from './views/season.js';
 import * as log from './views/log.js';
+import * as setup from './views/setup.js';
 
-const VIEWS = { today, week, coach, build, debrief, blocks, season, log };
+// `setup` (planning the season together) has no tab: it opens by itself
+// until done or skipped, and from Season.
+const VIEWS = { today, week, coach, build, debrief, blocks, season, log, setup };
 export const TABS = [
   ['today', 'Today'], ['week', 'Week'], ['coach', 'Coach'], ['build', 'Build'], ['debrief', 'Debrief'],
   ['blocks', 'Blocks'], ['season', 'Season'], ['log', 'Log'],
@@ -132,6 +135,12 @@ export function updateDebriefDot() {
   if (!dot) return;
   const done = new Set(state.debriefs.map((d) => d.practiceId));
   dot.hidden = !state.log.some((r) => r.date <= state.today && !done.has(r.id));
+}
+
+// The setup talk, once the saved data is in (not this device's copy while
+// the database is still connecting).
+function maybeSetup() {
+  if (!setupDone(state.plan) && state.tab !== 'setup') go('setup');
 }
 
 async function loadInto(s) {
@@ -313,6 +322,7 @@ async function connect(db) {
   state.storeKind = db.kind;
   db.onChange(() => reloadIfChanged(db));
   rerender();
+  maybeSetup();
   updateDebriefDot();
   renderStatus();
   if (dropped.length) toast('Saved data loaded. Some changes made while it was connecting were not applied.');
@@ -370,7 +380,10 @@ async function boot() {
       await connect(s);
     } else {
       store = local; // no database here: this device's storage, as before
+      maybeSetup();
     }
+  } else {
+    maybeSetup();
   }
   if ('serviceWorker' in navigator && !IS_ARTIFACT && location.protocol !== 'file:') {
     navigator.serviceWorker.register('sw.js').catch(() => {});

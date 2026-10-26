@@ -4,8 +4,8 @@
 // Claude's JSON reply back into blocks and practices. Pure functions, no DOM.
 
 import {
-  CATEGORIES, EQUIPMENT, FOCUSES, PATTERNS, STROKES, WEEKDAYS, byDateDesc, daysBetween, fmtDistance, focusLabel, gearsText, isOwn,
-  longDate, makeBlock, measureText, positionText, recordTitle, sessionsOn,
+  CATEGORIES, EQUIPMENT, FOCUSES, MEET_PRIORITY, PATTERNS, PHILOSOPHIES, SKILLS, STROKES, WEEKDAYS, byDateDesc, daysBetween, fmtDistance,
+  focusLabel, gearsText, isOwn, longDate, makeBlock, makePhase, measureText, phaseSpans, planPosition, positionText, recordTitle, sessionsOn,
 } from './practice.js';
 import { fmtClock, makeGearModel } from './gears.js';
 import { carryForward, debriefSummary } from './learn.js';
@@ -56,6 +56,23 @@ const clip = (s, n) => {
   const t = String(s ?? '').trim();
   return t.length > n ? `${t.slice(0, Math.max(0, n - 1)).trimEnd()}…` : t;
 };
+// The coach's philosophy, key skills, kit, the phase now (and what it is
+// for) and the A meets ahead.
+export function seasonLines(plan, date) {
+  const out = [];
+  const pick = (v, table) => [...(v?.keys || []).map((k) => table[k]), v?.text].filter(Boolean).join('; ');
+  if (pick(plan.philosophy, PHILOSOPHIES)) out.push(`Philosophy: ${clip(pick(plan.philosophy, PHILOSOPHIES), 600)}`);
+  if (pick(plan.skills, SKILLS)) out.push(`Key skills to work on: ${clip(pick(plan.skills, SKILLS), 400)}`);
+  if (plan.equipment) out.push(`Equipment the team has: ${plan.equipment.join(', ') || 'none'}`);
+  const pos = planPosition(plan, date);
+  if (pos.phase && pos.status === 'in') out.push(`Phase now: ${pos.phase.name}, week ${pos.phaseWeek + 1} of ${pos.phase.weeks}${pos.phase.description ? ` · ${clip(pos.phase.description, 400)}` : ''}`);
+  const next = phaseSpans(plan).find((s) => s.start > date);
+  if (next) out.push(`Next phase: ${next.phase.name} from ${next.start}${next.phase.description ? ` · ${clip(next.phase.description, 200)}` : ''}`);
+  const targets = (plan.meets || []).filter((m) => m.priority === 'A' && m.end >= date);
+  if (targets.length) out.push(`Taper meets ahead: ${targets.map((m) => `${m.name} ${m.start}`).join(', ')}`);
+  return out.length ? out : ['not set up yet'];
+}
+
 function sessionText(s) {
   const gears = gearsText(s.focus, ', ');
   return `${s.slot} ${s.minutes} min · ${focusLabel(s.focus)}${gears ? ` (gears ${gears})` : ''}${s.theme ? ` · theme: ${s.theme}` : ''}${s.note ? ` · ${s.note}` : ''}`;
@@ -200,6 +217,7 @@ function contextParts(state, learned, date, slot) {
   push('TODAY', today);
 
   push('THIS WEEK (each session: plan, then [status: what is written])', weekLines(state, learned, date));
+  push('SEASON PLAN (what the coach builds the season on)', seasonLines(plan, date));
 
   // plan.meets are kept in start order.
   const meets = (plan.meets || []).filter((m) => m.end >= date && daysBetween(date, m.start) <= 21);
@@ -424,4 +442,58 @@ export function offlineReply(message, wctx = null) {
     practice: null,
     blocks: [],
   };
+}
+
+// ------------------------------------------------- planning the season
+//
+// The setup talk can ask Claude to shape the phases still to come (from a
+// Monday on, the ones before stay) or to suggest what each phase is for.
+
+const PLAN_RULES = `You are helping a swim coach plan their season. You get their answers (meets with priorities, weekly schedule, philosophy, key skills, equipment) and the phases already in the plan. Reply with JSON only.
+Focuses a session can have: ${Object.keys(FOCUSES).join(', ')}.
+A phase is { "name", "weeks" (whole weeks), "volume" (0.4 to 1.3, 1 = a full week), "description" (one or two sentences in the coach's terms: what the phase is for and what to watch), "am": [7 focuses, Monday first], "pm": [7 focuses or null, Monday first; null where the week has no PM session] }.
+Plan back from the A meets: a taper that ends the week of each A meet, and the build to it before. B meets get at most an easy day or two; C meets are trained through. Use the coach's philosophy and key skills in the focuses and the descriptions. Sunday is usually "rest".`;
+
+function planBrief(plan, today, from) {
+  const pos = planPosition(plan, today);
+  const lines = [`Today: ${today}. Season starts ${plan.start}. Plan from: ${from}.`];
+  if (pos.phase && pos.status === 'in') lines.push(`Now: ${pos.phase.name}, week ${pos.phaseWeek + 1} of ${pos.phase.weeks}.`);
+  lines.push(`Course: ${plan.course || ''} (${plan.unit === 'm' ? 'metres' : 'yards'}).${plan.weeklyYards ? ` A hard week is about ${plan.weeklyYards} ${plan.unit === 'm' ? 'm' : 'yd'}.` : ''}`);
+  lines.push('Weekly schedule (minutes AM / PM, Monday first): ' + (plan.week || []).map((d, i) => `${WEEKDAYS[i]} ${d.am}/${d.pm}${d.amTheme ? ` (${d.amTheme})` : ''}`).join(', '));
+  lines.push(...seasonLines(plan, today).map((l) => `${l}`));
+  lines.push('Meets: ' + ((plan.meets || []).map((m) => `${m.name} ${m.start}${m.end !== m.start ? ` to ${m.end}` : ''}${m.priority ? ` [${m.priority}: ${MEET_PRIORITY[m.priority]}]` : ''}`).join('; ') || 'none'));
+  lines.push('Phases now:');
+  for (const sp of phaseSpans(plan)) lines.push(`- ${sp.start} to ${sp.end}: ${sp.phase.name} (${sp.phase.weeks} wk, volume ${sp.phase.volume})${sp.phase.description ? ` · ${clip(sp.phase.description, 200)}` : ''}`);
+  return lines.join('\n');
+}
+
+// Turns for sample.json. mode 'shape': the phases from `from` on;
+// 'describe': a description for every phase as it is.
+export function planTurns(plan, { today, from, mode = 'shape' }) {
+  const ask = mode === 'describe'
+    ? 'Write a description for each phase in the plan, in order. Reply { "descriptions": [string, one per phase], "note": string }.'
+    : `Plan the phases from ${from} to the last A meet (or the last meet). Reply { "phases": [phase, …] (only the phases from ${from} on), "note": "one or two sentences on the shape of the plan" }.`;
+  return [{ role: 'user', content: `${PLAN_RULES}\n\nCOACH'S ANSWERS AND PLAN\n${planBrief(plan, today, from)}\n\n${ask}` }];
+}
+
+// The reply → { phases } (checked, ready to put after the kept phases) or
+// { descriptions } (one per phase), plus a note. Throws when unusable.
+export function parsePlanReply(value, plan, mode = 'shape') {
+  const v = typeof value === 'string' ? extractJSON(value) : value;
+  if (!v || typeof v !== 'object') throw new Error('no plan in the reply');
+  const note = String(v.note || '').trim();
+  if (mode === 'describe') {
+    const d = Array.isArray(v.descriptions) ? v.descriptions.map((x) => String(x || '').trim()) : [];
+    if (!d.some(Boolean)) throw new Error('no descriptions in the reply');
+    return { descriptions: plan.phases.map((_, i) => d[i] || ''), note };
+  }
+  const list = Array.isArray(v.phases) ? v.phases.filter((p) => p && typeof p === 'object') : [];
+  if (!list.length) throw new Error('no phases in the reply');
+  const phases = list.map((p) => {
+    const ph = makePhase(p);
+    // PM sessions only where the week has one.
+    ph.pm = ph.pm.map((f, i) => (plan.week?.[i]?.pm ? f || 'aerobic' : null));
+    return ph;
+  });
+  return { phases, note };
 }

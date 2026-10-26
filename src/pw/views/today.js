@@ -92,6 +92,7 @@ function headCard(ctx, day) {
   return `<section class="card tw-head">
     <div class="eyebrow">${esc(longDate(state.today))}</div>
     <h2>${esc(positionText(pos))}</h2>
+    ${pos.status === 'in' && pos.phase?.description ? `<p class="small phase-desc">${esc(pos.phase.description)}</p>` : ''}
     ${pos.status === 'in' ? `<p class="muted small">Season week ${pos.week + 1} of ${pos.total}${state.plan.name && state.plan.name !== 'Season' ? ` · ${esc(state.plan.name)}` : ''}</p>` : ''}
     ${weekStrip(ctx)}
     ${banners.length ? `<div class="tw-banners">${banners.join('')}</div>` : ''}

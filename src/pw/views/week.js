@@ -160,6 +160,7 @@ function headHTML(ctx, week, totals, ui) {
     <div class="eyebrow">${esc(relWeek(monday, state.today))}</div>
     <h2>${esc(`${shortDate(monday, year)} – ${shortDate(sunday, year)}`)}</h2>
     <p class="wk-pos">${esc(positionText(week.position))}</p>
+    ${week.position.status === 'in' && week.position.phase?.description ? `<p class="small phase-desc">${esc(week.position.phase.description)}</p>` : ''}
     ${totals.planned || totals.extras ? `<p class="small wk-sum">${summary}</p>` : '<p class="small muted">No sessions in the plan this week.</p>'}
     ${stripHTML(ctx, week)}
     ${banners.length ? `<div class="wk-banners">${banners.join('')}</div>` : ''}

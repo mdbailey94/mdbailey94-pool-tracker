@@ -207,6 +207,7 @@ export function makePhase(p) {
     am,
     pm,
     ...(Object.keys(targets).length ? { targets } : {}),
+    ...(String(p.description || '').trim() ? { description: String(p.description).trim() } : {}),
   };
 }
 
@@ -230,8 +231,18 @@ export function makeWeek(week) {
 export function makeMeet(m) {
   const start = /^\d{4}-\d{2}-\d{2}$/.test(m.start) ? m.start : todayISO();
   const end = /^\d{4}-\d{2}-\d{2}$/.test(m.end) && m.end >= start ? m.end : start;
-  return { id: m.id || uid('m'), name: String(m.name || 'Meet').trim(), start, end, course: String(m.course || ''), note: String(m.note || '') };
+  const priority = MEET_PRIORITY[m.priority] ? m.priority : '';
+  return { id: m.id || uid('m'), name: String(m.name || 'Meet').trim(), start, end, course: String(m.course || ''), note: String(m.note || ''), ...(priority ? { priority } : {}) };
 }
+
+// How much a meet matters to the plan: A meets are tapered for (the phases
+// are planned back from them), B meets get a short rest, C meets are swum
+// through training.
+export const MEET_PRIORITY = {
+  A: 'Taper meet',
+  B: 'Rest a little',
+  C: 'Train through',
+};
 
 export function defaultPlan(start = todayISO()) {
   return {
@@ -265,8 +276,140 @@ export function migratePlan(saved) {
   plan.meets = (plan.meets || []).map(makeMeet).sort((a, b) => (a.start < b.start ? -1 : 1));
   plan.groups = Array.isArray(plan.groups) ? plan.groups : [];
   plan.preMeet = plan.preMeet !== false;
+  // What the season is built on, from the setup talk: in the coach's words
+  // plus picked keys (PHILOSOPHIES, SKILLS, EQUIPMENT the team has).
+  plan.philosophy = { keys: keysIn(saved?.philosophy?.keys, PHILOSOPHIES), text: String(saved?.philosophy?.text || '').trim() };
+  plan.skills = { keys: keysIn(saved?.skills?.keys, SKILLS), text: String(saved?.skills?.text || '').trim() };
+  plan.equipment = Array.isArray(saved?.equipment) ? saved.equipment.filter((e) => EQUIPMENT.includes(e)) : null;
+  plan.setup = isObj(saved?.setup) ? { ...saved.setup } : {};
   delete plan.sessionMinutes;
   return plan;
+}
+
+const isObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
+const keysIn = (list, table) => (Array.isArray(list) ? [...new Set(list.filter((k) => Object.hasOwn(table, k)))] : []);
+
+// Training philosophies and key skills the coach can pick in the setup talk
+// (and add to in their own words).
+export const PHILOSOPHIES = {
+  base: 'Aerobic base first',
+  gears: 'Gear system (G1–G6)',
+  race: 'Race-pace heavy',
+  quality: 'Quality over volume',
+  volume: 'High volume',
+  im: 'IM / all-round',
+  speed: 'Speed and power',
+  technique: 'Technique every day',
+};
+export const SKILLS = {
+  underwaters: 'Underwaters',
+  starts: 'Starts',
+  turns: 'Turns',
+  breakouts: 'Breakouts',
+  tempo: 'Tempo / stroke rate',
+  count: 'Stroke count',
+  breathing: 'Breath control',
+  kick: 'Kick',
+  pacing: 'Pacing',
+  finishes: 'Finishes',
+};
+
+// The setup talk is finished or skipped (it opens by itself until then).
+export const setupDone = (plan) => !!(plan?.setup?.done || plan?.setup?.skipped);
+
+// ------------------------------------------------------ drafting phases
+
+// The weeks each phase covers: [{ phase, index, start (Monday), end (Sunday) }].
+export function phaseSpans(plan) {
+  let at = mondayOf(plan.start);
+  return plan.phases.map((phase, index) => {
+    const span = { phase, index, start: at, end: addDays(at, phase.weeks * 7 - 1) };
+    at = addDays(at, phase.weeks * 7);
+    return span;
+  });
+}
+
+// What each drafted phase is for (the coach rewrites these).
+export const PHASE_DESCRIPTIONS = {
+  base: 'Aerobic base: G1–G3 volume, technique and kick every week; build the engine.',
+  build: 'Build: threshold and race-pace work grow while the aerobic base holds.',
+  race: 'Race prep: race-pace and speed sets, broken swims, starts and turns; volume comes down.',
+  taper: 'Taper: volume drops, intensity stays sharp, plenty of rest and race rehearsal.',
+};
+
+// Share of the weeks before a taper given to base / build / race prep, by
+// the coach's philosophy.
+function phaseShares(keys = []) {
+  if (keys.includes('race') || keys.includes('speed')) return [0.3, 0.35, 0.35];
+  if (keys.includes('base') || keys.includes('volume')) return [0.5, 0.3, 0.2];
+  if (keys.includes('quality')) return [0.35, 0.4, 0.25];
+  return [0.4, 0.35, 0.25];
+}
+
+// `weeks` split by `shares` (whole weeks, at least one each, adding up).
+function splitWeeks(weeks, shares) {
+  const n = Math.min(shares.length, weeks);
+  if (n <= 0) return [];
+  const use = shares.slice(shares.length - n); // short cycles keep the later phases
+  const sum = use.reduce((a, b) => a + b, 0);
+  const out = use.map((s) => Math.max(1, Math.floor((weeks * s) / sum)));
+  let left = weeks - out.reduce((a, b) => a + b, 0);
+  for (let i = 0; left > 0; i = (i + 1) % n, left--) out[i] += 1;
+  for (let i = n - 1; left < 0; i = (i - 1 + n) % n) if (out[i] > 1) { out[i] -= 1; left++; }
+  return out;
+}
+
+// One drafted phase from a preset, with a PM focus on every weekday the
+// week has a PM session.
+function draftPhase(key, weeks, week, name) {
+  const p = PHASE_PRESETS[key];
+  const pmFocus = { base: 'aerobic', build: 'technique', race: 'technique', taper: 'recovery' }[key];
+  const pm = (week || DEFAULT_WEEK).map((d, i) => (d.pm ? p.pm[i] || pmFocus : null));
+  return makePhase({ ...p, name, weeks, pm, description: PHASE_DESCRIPTIONS[key] });
+}
+
+// A season of phases drafted back from the A meets (or, with none marked,
+// the last meet): before each, a taper ending the week of the meet, and
+// before that base / build / race prep. Phases before `from` (a Monday)
+// stay as they are, the one running then cut at `from`, so a plan can be
+// started or re-drafted halfway through the season. With no meet ahead,
+// 12 weeks of base / build / race prep.
+// The phases before `from` (a Monday), the one running then cut there.
+export function phasesBefore(plan, from) {
+  const out = [];
+  for (const s of phaseSpans(plan)) {
+    if (s.start >= from) break;
+    out.push(makePhase({ ...s.phase, weeks: Math.min(s.phase.weeks, daysBetween(s.start, from) / 7) }));
+  }
+  return out;
+}
+
+export function draftPhases(plan, { from = plan.start } = {}) {
+  const start = mondayOf(plan.start);
+  const begin = mondayOf(from < start ? start : from);
+  const out = phasesBefore(plan, begin);
+  const ahead = (plan.meets || []).filter((m) => mondayOf(m.start) >= begin);
+  let targets = ahead.filter((m) => m.priority === 'A');
+  if (!targets.length && ahead.length) targets = [ahead[ahead.length - 1]];
+  const shares = phaseShares(plan.philosophy?.keys);
+  const names = ['Base', 'Build', 'Race prep'];
+  const keys = ['base', 'build', 'race'];
+  let at = begin;
+  targets.forEach((m, i) => {
+    const weeks = daysBetween(at, mondayOf(m.start)) / 7 + 1; // through the meet's week
+    if (weeks < 1) return;
+    const last = i === targets.length - 1;
+    const taper = Math.min(weeks, weeks >= 12 && last ? 3 : weeks >= 5 ? 2 : 1);
+    const cycle = targets.length > 1 ? ` ${i + 1}` : '';
+    splitWeeks(weeks - taper, shares).forEach((w, j, all) => {
+      const k = 3 - all.length + j;
+      out.push(draftPhase(keys[k], w, plan.week, `${names[k]}${cycle}`));
+    });
+    out.push(draftPhase('taper', taper, plan.week, `Taper · ${m.name}`));
+    at = addDays(mondayOf(m.start), 7);
+  });
+  if (!targets.length) splitWeeks(12, shares).forEach((w, j) => out.push(draftPhase(keys[j], w, plan.week, names[j])));
+  return out.length ? out : plan.phases.map(makePhase);
 }
 
 export const planWeeks = (plan) => plan.phases.reduce((n, p) => n + p.weeks, 0);

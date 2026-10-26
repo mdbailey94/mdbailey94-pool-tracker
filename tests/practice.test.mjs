@@ -419,3 +419,58 @@ test('a saved block reads back as printed, in its own measure, with its saved si
   assert.deepEqual(composedYards(composePractice({ blocks: [{ ...kick, circuit: true }, { ...plainKick, circuit: true }], rounds: 2, pattern: 'build', pace: 100, unit: 'y' })),
     { byGear: { G2: 500, G3: 500 }, kick: 1000 });
 });
+
+// ------------------------------------------------- planning the season
+
+test('plan setup fields: meet priority, phase description, philosophy, skills, equipment', async () => {
+  const p = await import('../src/practice.js');
+  const plan = p.migratePlan({
+    ...p.defaultPlan('2026-08-31'),
+    meets: [{ name: 'Made-up Champs', start: '2026-12-03', end: '2026-12-06', priority: 'A' }, { name: 'Dual meet', start: '2026-10-10', priority: 'Z' }],
+    phases: [{ name: 'Base', weeks: 4, description: '  Aerobic engine  ' }],
+    philosophy: { keys: ['base', 'nope', 'base'], text: ' Kick every day ' },
+    skills: { keys: ['turns'] },
+    equipment: ['fins', 'jetpack'],
+  });
+  assert.deepEqual(plan.meets.map((m) => m.priority ?? ''), ['', 'A']);
+  assert.equal(plan.phases[0].description, 'Aerobic engine');
+  assert.deepEqual(plan.philosophy, { keys: ['base'], text: 'Kick every day' });
+  assert.deepEqual(plan.skills, { keys: ['turns'], text: '' });
+  assert.deepEqual(plan.equipment, ['fins']);
+  assert.equal(p.setupDone(plan), false);
+  assert.equal(p.setupDone({ ...plan, setup: { skipped: '2026-10-26' } }), true);
+  assert.equal(p.migratePlan({ ...plan, equipment: undefined }).equipment, null, 'not answered: everything counts as available');
+});
+
+test('draftPhases plans back from the A meets and keeps what came before', async () => {
+  const p = await import('../src/practice.js');
+  const plan = p.migratePlan({
+    ...p.defaultPlan('2026-08-31'),
+    meets: [
+      { name: 'Fall Invite', start: '2026-10-30', end: '2026-11-01', priority: 'B' },
+      { name: 'Winter Champs', start: '2026-12-03', end: '2026-12-06', priority: 'A' },
+      { name: 'Spring Champs', start: '2027-03-04', end: '2027-03-07', priority: 'A' },
+    ],
+  });
+  const phases = p.draftPhases(plan, { from: '2026-11-02' });
+  const spans = p.phaseSpans({ ...plan, phases });
+  // Before Nov 2 the plan is as it was, the phase running then cut there.
+  const kept = spans.filter((s) => s.start < '2026-11-02');
+  assert.equal(kept.at(-1).end, '2026-11-01');
+  assert.deepEqual(kept.map((s) => s.phase.id), plan.phases.slice(0, kept.length).map((x) => x.id));
+  // A taper ends the week of each A meet; the B meet gets none.
+  const tapers = spans.filter((s) => /^Taper/.test(s.phase.name));
+  assert.deepEqual(tapers.map((s) => [s.phase.name, s.end]), [['Taper · Winter Champs', '2026-12-06'], ['Taper · Spring Champs', '2027-03-07']]);
+  assert.equal(tapers[1].phase.weeks, 3, 'a long build to the last A meet tapers 3 weeks');
+  assert.ok(spans.filter((s) => s.start >= '2026-11-02').every((s) => s.phase.description), 'every drafted phase says what it is for');
+  // Doubles keep a PM focus on the days the week has one, and only there.
+  for (const s of spans.filter((x) => x.start >= '2026-11-02')) {
+    s.phase.pm.forEach((f, i) => assert.equal(!!f, !!plan.week[i].pm, `${s.phase.name} ${i}`));
+  }
+  // No meet ahead: 12 weeks of base / build / race prep.
+  const none = p.draftPhases({ ...plan, meets: [] }, { from: plan.start });
+  assert.equal(none.reduce((n, x) => n + x.weeks, 0), 12);
+  // A race-pace philosophy gives the build-up less base.
+  const race = p.draftPhases({ ...plan, meets: [], philosophy: { keys: ['race'] } }, { from: plan.start });
+  assert.ok(race[0].weeks < none[0].weeks);
+});

@@ -60,6 +60,13 @@ and the coach's own blocks, and learns from what happens on deck.
 - **Style learning.** From the coach's own blocks the app learns how long send-offs are relative to each
   group's G3 pace for each kind of line, the usual rest line and rounds, and uses that to write new blocks and
   the cuts slower groups take to finish on time.
+- **Planning the season together.** The first time the app opens (and from Season), it walks the coach
+  through the season step by step: major meets and how much each matters (A taper, B short rest, C train
+  through), the training week, their philosophy, key skills and the equipment the team has. It then drafts
+  the phases back from the A meets (or Claude shapes them from the answers) and asks what each phase is for.
+  A coach who already has a plan gets the same steps filled in from it; mid-season, the phases already swum
+  stay as they are and only what is still to come is re-drafted. The gear chart, groups and formatting are
+  kept. The coach chat reads the philosophy, skills, equipment and the current phase's description.
 - **Season.** AM and PM sessions per weekday (doubles), phases with a focus per session, meets (no practice;
   the day before sharpens), weekday themes, a hard week's yards and each phase's gear-band and kick targets.
 - **Week.** The lead coach's planning board: every session Monday to Sunday with its focus, gears, minutes and

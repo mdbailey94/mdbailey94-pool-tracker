@@ -258,3 +258,31 @@ test('blocks the coach wrote rank above the same block written in the coach chat
   const chat = makeBlock({ id: 'chat', name: 'Made-up aerobic set', category: 'aerobic', minutes: 20, lines, source: 'claude' });
   assert.deepEqual(relevantBlocks([chat, mine], { focuses: ['aerobic'] }).map((b) => b.id), ['mine', 'chat']);
 });
+
+test('the season plan in the coach context, and plan replies from Claude', async () => {
+  const { seasonLines, planTurns, parsePlanReply } = await import('../src/coach.js');
+  const { defaultPlan, migratePlan } = await import('../src/practice.js');
+  const plan = migratePlan({
+    ...defaultPlan('2026-08-31'),
+    philosophy: { keys: ['gears'], text: 'Kick every day' }, skills: { keys: ['underwaters'] }, equipment: ['fins', 'snorkel'],
+    meets: [{ name: 'Made-up Champs', start: '2026-12-03', end: '2026-12-06', priority: 'A' }],
+    phases: [{ name: 'Base', weeks: 30, description: 'Aerobic engine' }],
+  });
+  const lines = seasonLines(plan, '2026-10-26').join('\n');
+  assert.match(lines, /Philosophy: Gear system \(G1–G6\); Kick every day/);
+  assert.match(lines, /Key skills to work on: Underwaters/);
+  assert.match(lines, /Equipment the team has: fins, snorkel/);
+  assert.match(lines, /Phase now: Base, week 9 of 30 · Aerobic engine/);
+  assert.match(lines, /Taper meets ahead: Made-up Champs 2026-12-03/);
+  const [turn] = planTurns(plan, { today: '2026-10-26', from: '2026-11-02' });
+  assert.match(turn.content, /Made-up Champs 2026-12-03 to 2026-12-06 \[A: Taper meet\]/);
+  assert.match(turn.content, /Plan the phases from 2026-11-02/);
+  // Shape: phases checked, PM only where the week has a PM session.
+  const r = parsePlanReply('```json\n{"phases":[{"name":"Build","weeks":3,"volume":1.1,"am":["aerobic","threshold","aerobic","race","aerobic","aerobic","rest"],"pm":["speed","aerobic","speed","technique",null,null,null],"description":"Grow threshold"}],"note":"Short build"}\n```', plan);
+  assert.equal(r.note, 'Short build');
+  assert.deepEqual(r.phases[0].pm.map((f, i) => !!f === !!plan.week[i].pm), Array(7).fill(true));
+  assert.equal(r.phases[0].description, 'Grow threshold');
+  assert.throws(() => parsePlanReply({ phases: [] }, plan));
+  // Describe: one per phase.
+  assert.deepEqual(parsePlanReply({ descriptions: ['Engine'] }, plan, 'describe').descriptions, ['Engine']);
+});
