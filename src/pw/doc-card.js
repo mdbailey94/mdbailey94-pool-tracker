@@ -361,9 +361,11 @@ async function fillIn(ctx) {
     for (const s of sc.sessions) {
       const pick = sc.pick[sessionKey(s)];
       if (pick === 'skip') continue;
+      // `printed`: the lines as the doc has them, send-offs and all, even
+      // when they match a block the app wrote (which it would re-time).
       const blocks = s.blocks.map((b) => {
         const base = b.match || made.get(blockKey(b));
-        return { ...base, name: b.name, minutes: b.minutes || base.minutes || null, distance: b.minutes ? null : base.distance, lines: b.lines, detail: b.extra || base.detail || '', circuit: false };
+        return { ...base, name: b.name, minutes: b.minutes || base.minutes || null, distance: b.minutes ? null : base.distance, lines: b.lines, detail: b.extra || base.detail || '', circuit: false, printed: true };
       });
       const plan = state.plan;
       const composed = composePractice({ blocks, rounds: 1, pace: plan.pace, unit: plan.unit });
@@ -378,6 +380,9 @@ async function fillIn(ctx) {
     if (added) await ctx.save.relearn();
     scan = null;
     ctx.toast(`Filled in ${filled} session${filled === 1 ? '' : 's'} from the doc${added ? ` · ${added} block${added === 1 ? '' : 's'} added to your library` : ''}`);
+  } catch (e) {
+    console.warn('Fill in from the doc', e);
+    ctx.toast(`Filling in stopped after ${filled} session${filled === 1 ? '' : 's'}: ${e?.message || e}`, { error: true });
   } finally {
     scanBusy = false;
     ctx.rerender();
