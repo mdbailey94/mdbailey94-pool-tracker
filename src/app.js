@@ -676,7 +676,7 @@ function renderFps() {
   const fileFps = state.fileMode && state.source.fps;
   el.textContent = state.fileMode
     ? (fileFps ? `Video: ${fileFps} frames per second${state.rate > 1 ? `, slowed ${state.rate}× (recorded at ${fileFps * state.rate})` : ''}` : '')
-    : (state.fps ? `Processing ${state.fps.toFixed(0)} frames per second` : '');
+    : (state.fps ? `${state.source.fps ? `Camera: ${Math.round(state.source.fps)} frames per second · p` : 'P'}rocessing ${state.fps.toFixed(0)}${state.source.fps ? '' : ' frames per second'}` : '');
   // Only the live camera is affected: a file is processed frame by frame at its own pace.
   if (warn) {
     warn.hidden = state.fileMode || !state.fps || state.frames < 15 || state.fps >= LOW_FPS;
