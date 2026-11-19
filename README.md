@@ -14,7 +14,7 @@ sessions on your device only. There are no accounts and no uploads.
 6. Tap **Done** to save the session. Past sessions can be reviewed and exported as CSV.
 
 Slow-motion clips are more accurate, because they record more frames per second. Some phones save slow motion
-as a file that plays back slowed down. If you use a video like that, pick the slow-motion speed (2x, 4x or 8x)
+as a file that plays back slowed down. If you use a video like that, pick the slow-motion speed (2x or 4x)
 before processing, so the flight time is scaled back to real time. Changing it later restarts the video.
 
 ## How the measurement works
@@ -48,8 +48,9 @@ What has been checked:
 - Test clips with a known flight time, run through the whole app with the real pose model: readings were
   between 0.1 cm low and 2.1 cm high. The clips are a photo of a person moved along a gravity arc, so they
   test timing but not real body movement.
-- Below about 8 frames per second the app cannot time a jump live. Use a recorded video instead: every frame
-  of a file is measured, however slow the device.
+- Below about 12 frames per second the app cannot time a jump live. Use a recorded video instead: a file
+  is held on each frame while it is measured, however slow the device. Files are assumed to hold at most
+  120 frames per second; a faster recording is still measured, but some of its frames are skipped.
 
 Results are better with steady lighting, a still phone, a plain background, tight clothing and a high frame
 rate. The app shows the frames per second it is processing and warns if that falls below about 20.

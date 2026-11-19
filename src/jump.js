@@ -93,14 +93,20 @@ export class JumpDetector {
     const t = s.t;
     const ok = s.visible && [t, s.footL, s.footR, s.hipY, s.bodyLen].every(Number.isFinite) && s.bodyLen > 0;
     const gap = t - this.lastSeen;
-    if (this.flight && gap > o.maxGap) this.abort('Lost sight of you mid-jump');
+    let jump = null;
+    if (this.flight && gap > o.maxGap) {
+      // Losing sight after touchdown (stepping away, motion blur) must not cost a
+      // flight that is already complete: score it with the ground contact seen so far.
+      if (this.phase === 'landed') jump = this.finish(Infinity);
+      else this.abort('Lost sight of you mid-jump');
+    }
     if (!ok) {
-      if (this.flight) this.flight.gaps++;
+      if (this.flight && this.phase === 'airborne') this.flight.gaps++;
       if (gap > o.noPersonAfter) {
         this.base = null; this.buf = []; this.phase = 'settling';
-        return { status: 'no-person', jump: null };
+        return { status: 'no-person', jump };
       }
-      return { status: this.status(), jump: null };
+      return { status: this.status(), jump };
     }
     if (gap > o.noPersonAfter) { this.base = null; this.buf = []; this.phase = 'settling'; }
     this.lastSeen = t;
@@ -108,7 +114,6 @@ export class JumpDetector {
     this.buf.push(p);
     while (this.buf.length && this.buf[0].t < t - (o.maxFlight + o.settleWindow + 1)) this.buf.shift();
 
-    let jump = null;
     if (this.phase === 'settling') this.trySettle(t);
     else if (this.phase === 'ready') {
       if (this.bothUp(p)) this.takeoff(p);
@@ -132,6 +137,12 @@ export class JumpDetector {
       }
     }
     return { status: this.status(), jump };
+  }
+
+  // Call when the stream ends (video finished, session closed): returns a jump that
+  // had landed but was still waiting for its post-landing window, else null.
+  flush() {
+    return this.flight && this.phase === 'landed' ? this.finish(Infinity) : null;
   }
 
   lift(p, foot) {
@@ -341,7 +352,7 @@ export class JumpDetector {
       const drop = (hipAt(landingT) - hipAt(takeoffT)) * scale;
       if (drop > o.dropNote) flag(drop > o.dropLow ? 0 : 1, 'Landing looked lower than takeoff, so the height may be overestimated. Land with straight legs, then bend');
       else if (drop < -o.dropNote) flag(drop < -o.dropLow ? 0 : 1, 'Takeoff looked lower than landing, so the height may be underestimated');
-    } else flag(1, 'Too few video frames in the air to cross-check this jump');
+    } else flag(0, 'Too few video frames in the air to measure this jump reliably');
     if (air.length < 6) flag(1, `Only ${air.length} video frames in the air, so timing is coarse`);
     if (f.gaps) flag(1, 'Tracking dropped out briefly during the jump');
     if (shift > o.levelNote) flag(1, 'You landed away from your takeoff spot; try to land where you took off');

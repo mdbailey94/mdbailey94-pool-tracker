@@ -27,9 +27,9 @@ const STATUS_TEXT = {
   airborne: 'In the air…',
 };
 const FEET = new Set([27, 28, 29, 30, 31, 32]);
-const SPEEDS = [1, 2, 4, 8];
+const SPEEDS = [1, 2, 4]; // 120 fps footage saved at 60 or 30 fps
 const LOW_FPS = 20;
-const TOO_SLOW_FPS = 8; // below this the detector cannot learn the ground level or time a flight
+const TOO_SLOW_FPS = 12; // below this the detector cannot learn the ground level or time a flight
 
 const state = {
   mode: 'home',
@@ -83,10 +83,19 @@ function bindUnitToggle(root) {
   });
 }
 
-function beep() {
+// Browsers (iOS above all) only let sound start from a tap, so the audio is
+// set up when the user starts a session, not when the first jump lands.
+function primeAudio() {
   try {
     state.audio ||= new (window.AudioContext || window.webkitAudioContext)();
+    if (state.audio.state === 'suspended') state.audio.resume();
+  } catch { /* no sound on this device */ }
+}
+
+function beep() {
+  try {
     const a = state.audio;
+    if (!a) return;
     if (a.state === 'suspended') a.resume();
     const o = a.createOscillator();
     const g = a.createGain();
@@ -207,28 +216,39 @@ function showDetail(id) {
 // -------------------------------------------------------------------- live
 
 async function startCamera(facing) {
+  if (state.opening) return; // a second tap while the permission prompt is up
+  state.opening = true;
+  primeAudio();
   state.fileMode = false;
   state.file = null;
   state.facing = facing;
   try {
     const info = await state.source.openCamera({ facing });
+    state.opening = false;
     await enterLive(info);
   } catch (e) {
     state.source.close();
     homeError(cameraMessage(e));
+  } finally {
+    state.opening = false;
   }
 }
 
 async function startFile(file) {
+  if (state.opening) return;
+  state.opening = true;
   state.fileMode = true;
   state.file = file;
   state.speed = 1;
   try {
     const info = await state.source.openFile(file);
+    state.opening = false;
     await enterLive(info);
   } catch (e) {
     state.source.close();
     homeError(e.message || 'That video could not be opened.');
+  } finally {
+    state.opening = false;
   }
 }
 
@@ -270,7 +290,11 @@ async function enterLive(info) {
   resetRun();
   buildPanel();
   sizeStage(info);
-  if (!state.fileMode) state.release = await keepAwake();
+  if (!state.fileMode) {
+    const release = await keepAwake();
+    if (state.mode !== 'live') { release(); return; } // Done was tapped meanwhile
+    state.release = release;
+  }
   await ensurePose();
   if (state.mode !== 'live') return;
   if (state.pose && !state.fileMode) beginRun();
@@ -296,6 +320,7 @@ function beginRun() {
   state.finished = false;
   state.lastFrameAt = 0;
   state.detector.reset();
+  setError('');
   state.source.start(onFrame);
   setStatus(null);
   updateFileControls();
@@ -464,6 +489,7 @@ function updateFileControls() {
 }
 
 async function runFile() {
+  primeAudio();
   if (state.finished || state.frames) await restartFile(); else beginRun();
 }
 
@@ -476,6 +502,9 @@ async function restartFile() {
     setError(e.message || 'That video could not be opened.');
     return;
   }
+  // A re-run replaces the previous run's saved session; it must not leave a
+  // duplicate, or a reading taken at the wrong slow-motion speed, in history.
+  deleteSession(state.id);
   resetRun();
   renderJumps();
   setStatus(null);
@@ -501,16 +530,16 @@ async function flipCamera() {
     state.landmarks = null;
     sizeStage(info);
     setStatus(null);
-    state.source.start(onFrame);
     state.lastFrameAt = 0;
     state.fps = null;
-    state.running = true;
+    // If the model is still loading, enterLive starts the frames when it is ready.
+    if (state.pose) { state.source.start(onFrame); state.running = true; }
   } catch (e) {
+    if (e?.name === 'SupersededError' || state.mode !== 'live') return; // Done was tapped mid-flip
     setError(cameraMessage(e));
     try {
       await state.source.openCamera({ facing: state.facing });
-      state.source.start(onFrame);
-      state.running = true;
+      if (state.pose) { state.source.start(onFrame); state.running = true; }
     } catch { /* leave the error showing */ }
   }
   btn.disabled = false;
@@ -521,6 +550,9 @@ function videoFinished() {
   state.running = false;
   state.finished = true;
   state.source.stop();
+  // A jump that landed in the clip's last moments is still waiting to be scored.
+  const last = state.detector.flush();
+  if (last) addJump(last);
   const n = state.jumps.length;
   const el = $('#status');
   el.className = 'status';
@@ -574,6 +606,7 @@ function drawPose() {
 // ------------------------------------------------------------------ leaving
 
 function finish() {
+  if (state.running) { const last = state.detector?.flush(); if (last) addJump(last); }
   state.running = false;
   state.source.close();
   state.pose?.close();

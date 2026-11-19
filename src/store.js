@@ -28,9 +28,16 @@ export const newSessionId = () => `s${Date.now().toString(36)}${Math.random().to
 export const loadUnit = () => (read(UNIT_KEY, 'cm') === 'in' ? 'in' : 'cm');
 export const saveUnit = (unit) => write(UNIT_KEY, unit);
 
+// Stored data is not trusted: the storage is shared by every page on this
+// origin, so anything that isn't a well-formed session is dropped.
+const validJump = (j) => j && Number.isFinite(j.heightM) && Number.isFinite(j.flightTime);
 export const loadSessions = () => {
   const all = read(SESSIONS_KEY, []);
-  return Array.isArray(all) ? all : [];
+  if (!Array.isArray(all)) return [];
+  return all
+    .filter((s) => s && typeof s.id === 'string' && typeof s.startedAt === 'string' && Array.isArray(s.jumps))
+    .map((s) => ({ ...s, jumps: s.jumps.filter(validJump) }))
+    .filter((s) => s.jumps.length);
 };
 
 // Saves (or replaces) a session. A session with no jumps is removed instead.

@@ -2,9 +2,13 @@
 // releases are never mixed; the cached copy is used only when offline.
 // The pose model files (vendor/mediapipe/) are large and never change for a
 // given version, so they are cached on first use and served cache-first.
-const CACHE = 'jump-height-v1';
+const PREFIX = 'jump-height-';
+const CACHE = `${PREFIX}v1`;
+// Named after the vendored MediaPipe version: change it whenever those files
+// change, so an old bundle is never served alongside a new wasm or model.
+const VENDOR_CACHE = `${PREFIX}mediapipe-0.10.14`;
 const ASSETS = [
-  './', 'index.html', 'app.css', 'manifest.webmanifest', 'icon.svg',
+  './', 'index.html', 'app.css', 'manifest.webmanifest', 'icon.svg', 'icon-180.png',
   'src/app.js', 'src/capture.js', 'src/pose.js', 'src/jump.js', 'src/store.js',
 ];
 const VENDOR = 'vendor/mediapipe/';
@@ -24,7 +28,11 @@ self.addEventListener('install', (e) => {
 self.addEventListener('activate', (e) => {
   e.waitUntil(
     caches.keys()
-      .then((keys) => Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k))))
+      // Cache Storage is shared by every app on this origin (all of a user's
+      // GitHub Pages sites), so only this app's own old caches are removed.
+      .then((keys) => Promise.all(keys
+        .filter((k) => k.startsWith(PREFIX) && k !== CACHE && k !== VENDOR_CACHE)
+        .map((k) => caches.delete(k))))
       .then(() => self.clients.claim())
       .then(warmVendor),
   );
@@ -33,7 +41,7 @@ self.addEventListener('activate', (e) => {
 // Fetch the model files in the background, one at a time. Never blocks or fails the install.
 async function warmVendor() {
   try {
-    const c = await caches.open(CACHE);
+    const c = await caches.open(VENDOR_CACHE);
     for (const f of VENDOR_FILES) {
       if (await c.match(abs(f))) continue;
       try {
@@ -55,7 +63,7 @@ self.addEventListener('fetch', (e) => {
       const res = await fetch(e.request);
       if (res.ok && res.status === 200) {
         const copy = res.clone();
-        caches.open(CACHE).then((c) => c.put(url.href, copy));
+        caches.open(VENDOR_CACHE).then((c) => c.put(url.href, copy));
       }
       return res;
     }

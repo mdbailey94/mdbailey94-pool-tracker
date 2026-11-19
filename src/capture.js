@@ -2,12 +2,18 @@
 // file, delivered as the <video> element itself plus a per-frame timestamp in
 // seconds. Jump height comes from flight time, so frame timing is the product.
 
+// Video files are assumed to hold at most 120 frames per second.
+const FILE_RATE = 0.5;
+
 export function cameraSupported() {
   return Boolean(navigator.mediaDevices?.getUserMedia) && window.isSecureContext;
 }
 
 export class VideoSource {
   constructor(video) {
+    this.gen = 0;
+    this.busy = false;
+    this.onVisibility = null;
     this.video = video;
     this.stream = null;
     this.url = null;
@@ -23,10 +29,19 @@ export class VideoSource {
   // device without that camera still opens whatever it has.
   async openCamera({ facing = 'environment' } = {}) {
     this.close();
-    this.stream = await navigator.mediaDevices.getUserMedia({
+    const gen = this.gen;
+    const stream = await navigator.mediaDevices.getUserMedia({
       audio: false,
       video: { facingMode: { ideal: facing }, width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 60 } },
     });
+    // close() or another open happened while the permission prompt was up:
+    // this stream has no owner, so stop it or the camera light stays on.
+    if (gen !== this.gen) {
+      stream.getTracks().forEach((t) => t.stop());
+      throw Object.assign(new Error('Camera request was superseded'), { name: 'SupersededError' });
+    }
+    this.stream = stream;
+    this.video.playbackRate = 1;
     this.live = true;
     this.fps = this.stream.getVideoTracks()[0]?.getSettings().frameRate ?? null;
     Object.assign(this.video, { muted: true, playsInline: true, loop: false, srcObject: this.stream });
@@ -40,6 +55,10 @@ export class VideoSource {
     this.live = false;
     this.fps = null;
     Object.assign(this.video, { muted: true, playsInline: true, loop: false, srcObject: null, src: this.url });
+    // Frame callbacks fire at most once per screen refresh, so a file is played
+    // slowly enough that each of its frames gets its own refresh (up to 120 fps
+    // on a 60 Hz screen). Timing comes from mediaTime, so speed doesn't affect it.
+    this.video.playbackRate = FILE_RATE;
     const info = await this.ready();
     // Show the first frame so the user can check the framing.
     this.video.currentTime = Math.min(0.1, this.video.duration || 0);
@@ -63,7 +82,16 @@ export class VideoSource {
     this.onFrame = onFrame;
     this.running = true;
     this.lastT = -Infinity;
-    if (!this.live) this.video.play().catch(() => {});
+    if (!this.live) {
+      this.video.play().catch(() => {});
+      // A hidden tab stops frame callbacks but not playback, which would skip
+      // frames unseen: hold the file while hidden.
+      this.onVisibility = () => {
+        if (document.hidden) this.video.pause();
+        else if (this.running && !this.busy && !this.video.ended) this.video.play().catch(() => {});
+      };
+      document.addEventListener('visibilitychange', this.onVisibility);
+    }
     this.schedule();
   }
 
@@ -92,18 +120,22 @@ export class VideoSource {
       // inference costs time instead of frames: every frame of the clip is
       // measured. A live camera can't wait, so there frames are skipped.
       if (!this.live) this.video.pause();
+      this.busy = true;
       try {
         await this.onFrame?.(this.video, t);
       } catch (e) {
         console.error(e);
       }
-      if (!this.live && this.running && !this.video.ended) this.video.play().catch(() => {});
+      this.busy = false;
+      if (!this.live && this.running && !this.video.ended && !document.hidden) this.video.play().catch(() => {});
     }
     this.schedule();
   }
 
   stop() {
     this.running = false;
+    if (this.onVisibility) document.removeEventListener('visibilitychange', this.onVisibility);
+    this.onVisibility = null;
     if (this.handle != null) {
       if (this.video.cancelVideoFrameCallback) this.video.cancelVideoFrameCallback(this.handle);
       else cancelAnimationFrame(this.handle);
@@ -117,6 +149,7 @@ export class VideoSource {
   }
 
   close() {
+    this.gen++; // orphans any camera request still waiting on the user
     this.stop();
     this.stream?.getTracks().forEach((t) => t.stop());
     this.stream = null;

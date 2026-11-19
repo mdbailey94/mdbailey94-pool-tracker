@@ -224,3 +224,40 @@ test('real pose trace: flight time 0.600 s', { skip: !existsSync(FIXTURE) && 'fi
     }
   }
 });
+
+// A flight that has already landed must survive the stream ending, or sight being lost,
+// before the post-landing window has passed (a tightly trimmed clip; stepping out of view).
+test('a landed jump is kept when the stream ends or sight is lost just after landing', () => {
+  for (const fps of [30, 60]) for (let seed = 1; seed <= 5; seed++) {
+    const { samples, truth } = simulate({ seed: 40 + seed + fps, fps, noise: 0.004, script: [stand(1.2), { type: 'jump', height: 0.4 }, stand(1)] });
+    const cut = truth[0].landingT + 0.12;
+    const head = samples.filter((s) => s.t <= cut);
+
+    // Clip ends 0.12 s after touchdown: nothing from push, the jump comes from flush().
+    const a = new JumpDetector();
+    const pushed = head.map((s) => a.push(s).jump).filter(Boolean);
+    assert.equal(pushed.length, 0, 'jump should still be pending');
+    const flushed = a.flush();
+    assert.ok(flushed, `fps ${fps} seed ${seed}: flush returned no jump (${a.lastReject})`);
+    assert.ok(Math.abs(flushed.heightM - truth[0].heightM) < 0.04, `flush height off: ${flushed.heightM} vs ${truth[0].heightM}`);
+    assert.equal(a.flush(), null, 'flush must not report the same jump twice');
+
+    // Sight lost 0.12 s after touchdown for half a second: the jump is reported, not dropped.
+    const b = new JumpDetector();
+    const blank = (t) => ({ t, footL: NaN, footR: NaN, hipY: NaN, bodyLen: NaN, visible: false });
+    const gapped = [...head, ...samples.filter((s) => s.t > cut && s.t <= cut + 0.5).map((s) => blank(s.t)), ...samples.filter((s) => s.t > cut + 0.5)];
+    const { jumps } = run(b, gapped);
+    assert.equal(jumps.length, 1, `fps ${fps} seed ${seed}: expected 1 jump after losing sight, got ${jumps.length} (${b.lastReject})`);
+  }
+});
+
+test('a jump seen in under four frames is never better than low confidence', () => {
+  for (const fps of [8, 10]) for (let seed = 1; seed <= 10; seed++) {
+    const { samples } = simulate({ seed: 900 + seed + fps, fps, noise: 0.004, script: [stand(1.5), { type: 'jump', height: 0.2 }, stand(1.5)] });
+    const { jumps } = run(new JumpDetector(), samples);
+    for (const j of jumps) {
+      const frames = samples.filter((s) => s.t > j.takeoffT && s.t < j.landingT).length;
+      if (frames < 4) assert.equal(j.confidence, 'low', `fps ${fps} seed ${seed}: ${frames} frames in the air but ${j.confidence}`);
+    }
+  }
+});

@@ -35,14 +35,18 @@ export async function createPoseTracker() {
     landmarker = await make('CPU');
   }
 
-  let lastMs = -1;
+  let lastMs = -1, offset = 0;
   const none = { footL: NaN, footR: NaN, hipY: NaN, bodyLen: NaN, visible: false };
 
   // t in seconds. y values are returned raw: no temporal smoothing, because
   // filtering would lag/blur the takeoff and landing edges the jump timing uses.
   function detect(video, t) {
     // detectForVideo requires strictly increasing timestamps.
-    const ms = Math.max(Math.round(t * 1000), lastMs + 1);
+    // When time restarts (a file run again, a camera flip), shift the clock
+    // forward so stamps keep their true spacing; the model's tracking uses it.
+    let ms = Math.round(t * 1000) + offset;
+    if (ms < lastMs - 100) { offset += lastMs + 1000 - ms; ms = lastMs + 1000; }
+    ms = Math.max(ms, lastMs + 1);
     lastMs = ms;
     const lm = landmarker.detectForVideo(video, ms).landmarks?.[0];
     if (!lm) return { landmarks: null, sample: { ...none } };
