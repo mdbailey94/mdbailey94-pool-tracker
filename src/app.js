@@ -21,7 +21,7 @@ const loadingEl = $('#loading');
 const ctx = overlay.getContext('2d');
 
 const STATUS_TEXT = {
-  'no-person': 'Step into view. Whole body and feet.',
+  'no-person': 'Step into view. Hips, legs and feet.',
   settling: 'Stand still…',
   ready: 'Ready. Jump!',
   airborne: 'In the air…',
@@ -135,7 +135,7 @@ function showHome(message = '') {
       <h3>Setting up</h3>
       <ol class="steps">
         <li>Prop the phone so it stays still.</li>
-        <li>Keep your whole body in view, feet included, about 2 to 4 m away.</li>
+        <li>Keep your hips, legs and feet in view, from the front or the side, about 2 to 4 m away.</li>
         <li>Stand still until it says ready.</li>
         <li>Jump and land on the same spot, with your legs as straight as they were at takeoff.</li>
       </ol>
@@ -469,7 +469,12 @@ function renderFps() {
   const el = $('#fps');
   const warn = $('#fps-warn');
   if (!el) return;
-  el.textContent = state.fps ? `Processing ${state.fps.toFixed(0)} frames per second` : '';
+  // A file reports its own frame rate, which is what limits precision there;
+  // for the camera it is how many frames the phone manages to process.
+  const fileFps = state.fileMode && state.source.fps;
+  el.textContent = state.fileMode
+    ? (fileFps ? `Video: ${fileFps} frames per second${state.speed > 1 ? `, recorded at ${fileFps * state.speed}` : ''}` : '')
+    : (state.fps ? `Processing ${state.fps.toFixed(0)} frames per second` : '');
   // Only the live camera is affected: a file is processed frame by frame at its own pace.
   if (warn) {
     warn.hidden = state.fileMode || !state.fps || state.frames < 15 || state.fps >= LOW_FPS;
@@ -560,7 +565,7 @@ function videoFinished() {
   state.status = 'finished';
   if (!n) {
     $('#result-card').insertAdjacentHTML('beforeend', `<ul class="notes">
-      <li>Keep the whole body, feet included, in view.</li>
+      <li>Keep hips, legs and feet in view for the whole jump.</li>
       <li>Start with a second or two of standing still.</li>
       <li>If this was a slow-motion clip, set the slow-motion speed and run it again.</li></ul>`);
   }
@@ -578,9 +583,10 @@ function drawPose() {
   const W = overlay.width;
   const H = overlay.height;
   const dpr = window.devicePixelRatio || 1;
-  const ok = (p) => p && (p.visibility ?? 1) > 0.4;
+  const ok = (p) => p && (p.visibility ?? 1) > 0.15; // matches the far-leg threshold in pose.js
   ctx.lineCap = 'round';
   for (const [i, j] of mod.POSE_CONNECTIONS || []) {
+    if (i < 23 || j < 23) continue;
     const a = lm[i];
     const b = lm[j];
     if (!ok(a) || !ok(b)) continue;
@@ -593,7 +599,7 @@ function drawPose() {
     ctx.stroke();
   }
   lm.forEach((p, i) => {
-    if (!ok(p) || i < 11) return;
+    if (!ok(p) || i < 23) return; // legs only: that is all the measurement uses
     const foot = FEET.has(i);
     ctx.fillStyle = foot ? '#ffcf33' : '#4cc9f0';
     ctx.beginPath();

@@ -7,7 +7,7 @@ sessions on your device only. There are no accounts and no uploads.
 ## Using it
 
 1. Open the app and tap **Start camera**, or **Use a video** to analyse a recording.
-2. Prop the phone so it stays still. Keep your whole body in view, feet included, about 2 to 4 m away.
+2. Prop the phone so it stays still. Keep your hips, legs and feet in view, from the front or the side, about 2 to 4 m away.
 3. Stand still until the screen says **Ready**.
 4. Jump, and land on the same spot with your legs as straight as they were at takeoff.
 5. The height appears in large type. Switch between cm and inches at any time. Delete a jump if it was misread.
@@ -19,8 +19,10 @@ before processing, so the flight time is scaled back to real time. Changing it l
 
 ## How the measurement works
 
-A pose model (MediaPipe Pose Landmarker, running on the phone) finds your body in each frame. A detector
-watches your feet and hips to find the frame where you leave the ground and the frame where you land.
+A pose model (MediaPipe Pose Landmarker, running on the phone) finds your body in each frame. Only the hips,
+legs and feet are used. From the side, the far leg is hidden behind the near one for much of the jump; the
+app then relies on the leg it can see. A detector watches your feet and hips to find the frame where you
+leave the ground and the frame where you land.
 The time between them is the flight time, T. A jump follows a simple arc, so the height is
 
     height = g * T^2 / 8
@@ -49,8 +51,11 @@ What has been checked:
   between 0.1 cm low and 2.1 cm high. The clips are a photo of a person moved along a gravity arc, so they
   test timing but not real body movement.
 - Below about 12 frames per second the app cannot time a jump live. Use a recorded video instead: a file
-  is held on each frame while it is measured, however slow the device. Files are assumed to hold at most
-  120 frames per second; a faster recording is still measured, but some of its frames are skipped.
+  is held on each frame while it is measured, however slow the device. The app works out a file's frame
+  rate from its first frames, shows it, and sets the playback speed so that no frame is skipped (up to
+  240 frames per second on a 60 Hz screen).
+- One real side-on clip (60 frames per second): the app's takeoff and landing agree with the frames, read
+  by eye, to within about one frame at each end.
 
 Results are better with steady lighting, a still phone, a plain background, tight clothing and a high frame
 rate. The app shows the frames per second it is processing and warns if that falls below about 20.
