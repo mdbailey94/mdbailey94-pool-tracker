@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  assignLanes, cameraElevation, cameraRoll, framingHint, laneBounds, laneOf, placementAdvice, tiltFor,
+  assignLanes, cameraElevation, cameraRoll, framingHint, horizonTilt, laneBounds, laneOf, placementAdvice, tiltFor,
 } from '../src/lanes.js';
 import { findWideCamera } from '../src/capture.js';
 
@@ -86,6 +86,11 @@ test('cameraRoll: 0 when the picture is level, either way round', () => {
   near(cameraRoll(0, -90, 90), 0, 'screen angle reported the other way still reads level');
   near(cameraRoll(0, 135, 90), 0, 'landscape, leaning back, level');
   assert.ok(Math.abs(Math.abs(cameraRoll(10, 90, 90)) - 10) < 1e-6, 'landscape with one end 10 degrees up');
+  // The gauge's version needs no screen angle: level reads 0 upright or on its side,
+  // leaning back or not, and a tilt reads the same either way.
+  for (const [b, g] of [[90, 0], [135, 0], [105, 0], [0, 90], [0, -90], [0, 105], [0, 135]]) near(horizonTilt(b, g), 0, `level at beta ${b} gamma ${g}`);
+  assert.ok(Math.abs(Math.abs(horizonTilt(10, 90)) - 10) < 1e-6, 'on its side, one end 10 degrees up');
+  assert.ok(Math.abs(Math.abs(horizonTilt(90, 8)) - 0) < 1e-6, 'upright, turned about the vertical: still level');
 });
 
 test('placementAdvice: about 15 degrees on its side, about 45 upright, and level', () => {

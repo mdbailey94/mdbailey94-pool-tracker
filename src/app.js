@@ -3,7 +3,7 @@
 import { VideoSource, cameraSupported, keepAwake } from './capture.js';
 import { JumpDetector, analyseLanes } from './jump.js';
 import {
-  GUIDE, MAX_ATHLETES, TILTS, assignLanes, cameraElevation, cameraRoll, framingHint, laneBounds, placementAdvice, tiltFor,
+  GUIDE, MAX_ATHLETES, TILTS, assignLanes, cameraElevation, framingHint, horizonTilt, laneBounds, placementAdvice, tiltFor,
 } from './lanes.js';
 import {
   deleteSession, download, loadAthletes, loadSessions, loadUnit, newSessionId, saveAthletes, saveSession, saveUnit,
@@ -627,7 +627,9 @@ function watchTilt() {
   };
   try {
     if (typeof DeviceOrientationEvent.requestPermission === 'function') {
-      DeviceOrientationEvent.requestPermission().then((r) => { if (r === 'granted') listen(); }).catch(() => {});
+      // Listen whatever the answer: if it was refused no readings arrive and the written
+      // tip stays, and some browsers offer this call without really needing it.
+      DeviceOrientationEvent.requestPermission().then(listen, listen);
     } else listen();
   } catch { /* no sensor: the written tip stays */ }
 }
@@ -640,9 +642,8 @@ function unwatchTilt() {
 
 function onTilt(ev) {
   if (ev.beta == null || ev.gamma == null) return;
-  const angle = screen.orientation?.angle ?? window.orientation ?? 0;
   const elevation = cameraElevation(ev.beta, ev.gamma, state.facing);
-  const roll = cameraRoll(ev.beta, ev.gamma, angle);
+  const roll = horizonTilt(ev.beta, ev.gamma);
   // Smoothed a little so the readout does not flicker.
   const k = state.tilt ? 0.25 : 1;
   state.tilt = state.tilt
@@ -653,10 +654,9 @@ function onTilt(ev) {
 }
 
 // Sideways or upright: the recommended tilt differs.
-const isLandscape = () => {
-  const a = screen.orientation?.angle ?? window.orientation;
-  return a == null ? window.matchMedia('(orientation: landscape)').matches : Math.abs(a) % 180 === 90;
-};
+// (Judged by the picture's shape, not the screen's reported angle: a tablet's angle is 0
+// when it is on its side.)
+const isLandscape = () => window.matchMedia('(orientation: landscape)').matches;
 
 function renderTilt() {
   const box = $('#tilt');
