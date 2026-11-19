@@ -103,14 +103,23 @@ export function cameraRoll(beta, gamma, screenAngle = 0) {
 }
 
 // The phone sits on the ground leaning back, so the camera looks up at the athletes.
-// About 45 degrees is the starting point; the stand-here prompts do the fine tuning,
-// because the right angle depends on the lens and how far away the athletes are.
-export const TILT = { target: 45, low: 30, high: 55, level: 4 };
+// How far back depends on how it is held. On its side with the 0.5x wide camera, about
+// 15 degrees keeps the ground and the top of the jump both in the picture. Upright, the
+// picture is taller and about 45 degrees works. These are starting points: the
+// stand-here prompts do the fine tuning, because the right angle also depends on the
+// lens and on how far away the athletes are.
+export const TILTS = {
+  landscape: { target: 15, low: 8, high: 25 },
+  portrait: { target: 45, low: 30, high: 55 },
+};
+export const LEVEL = 4; // degrees the horizon may be off
+export const tiltFor = (landscape) => (landscape ? TILTS.landscape : TILTS.portrait);
 
-export function placementAdvice(elevation, roll) {
+export function placementAdvice(elevation, roll, landscape = false) {
   if (!Number.isFinite(elevation)) return { ok: false, text: '' };
-  if (elevation < TILT.low) return { ok: false, text: 'Lean the phone back more' };
-  if (elevation > TILT.high) return { ok: false, text: 'Stand the phone up more' };
-  if (Number.isFinite(roll) && Math.abs(roll) > TILT.level) return { ok: false, text: 'Level the phone: one side is higher' };
+  const { low, high } = tiltFor(landscape);
+  if (elevation < low) return { ok: false, text: 'Lean the phone back more' };
+  if (elevation > high) return { ok: false, text: 'Stand the phone up more' };
+  if (Number.isFinite(roll) && Math.abs(roll) > LEVEL) return { ok: false, text: 'Level the phone: one side is higher' };
   return { ok: true, text: 'Phone angle is good' };
 }

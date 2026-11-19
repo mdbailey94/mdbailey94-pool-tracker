@@ -3,7 +3,7 @@
 import { VideoSource, cameraSupported, keepAwake } from './capture.js';
 import { JumpDetector, analyseLanes } from './jump.js';
 import {
-  GUIDE, MAX_ATHLETES, TILT, assignLanes, cameraElevation, cameraRoll, framingHint, laneBounds, placementAdvice,
+  GUIDE, MAX_ATHLETES, TILTS, assignLanes, cameraElevation, cameraRoll, framingHint, laneBounds, placementAdvice, tiltFor,
 } from './lanes.js';
 import {
   deleteSession, download, loadAthletes, loadSessions, loadUnit, newSessionId, saveAthletes, saveSession, saveUnit,
@@ -39,6 +39,7 @@ const state = {
   file: null,
   rate: null, // file mode: how many times slower than life the clip plays
   facing: 'environment',
+  wide: true, // use the rear 0.5x camera when the phone has one
   pose: null,
   athletes: loadAthletes(), // how many athletes share the screen, each in their own lane
   lanes: [], // per athlete: { detector, rec, status, hint, entry }
@@ -162,19 +163,19 @@ function showHome(message = '') {
     <section class="card">
       <h3>Setting up</h3>
       <div class="setup">
-        <svg class="setup-pic" viewBox="0 0 220 120" role="img" aria-label="Phone on the ground leaning back about 45 degrees, pointing up at an athlete 2 to 3 metres away">
+        <svg class="setup-pic" viewBox="0 0 220 120" role="img" aria-label="Phone on its side on the ground, leaning back about 15 degrees, looking up at an athlete 2 to 3 metres away">
           <line x1="6" y1="104" x2="214" y2="104" class="pic-ground"/>
-          <rect x="22" y="70" width="9" height="40" rx="2" transform="rotate(-45 26.5 104)" class="pic-phone"/>
-          <path d="M40 92 L150 34 M40 92 L150 100" class="pic-view"/>
-          <path d="M54 104 A26 26 0 0 0 49 87" class="pic-arc"/><text x="60" y="99" class="pic-text">45°</text>
+          <rect x="24" y="78" width="7" height="26" rx="2" transform="rotate(-15 27.5 104)" class="pic-phone"/>
+          <path d="M32 90 L150 16 M32 90 L150 108" class="pic-view"/>
+          <path d="M70 104 A46 46 0 0 0 68 92" class="pic-arc"/><text x="76" y="100" class="pic-text">${TILTS.landscape.target}°</text>
           <circle cx="168" cy="30" r="7" class="pic-body"/>
           <path d="M168 37 V72 M168 72 L160 103 M168 72 L176 103 M168 46 L156 62 M168 46 L180 62" class="pic-body-line"/>
-          <text x="84" y="116" class="pic-text">2 to 3 m</text>
+          <text x="84" y="118" class="pic-text">2 to 3 m</text>
         </svg>
         <ol class="steps">
-          <li>Put the phone on the ground, leaning back about 45°, so it looks up at the athletes from 2 to 3 m away. Prop it so it cannot move.</li>
-          <li>${state.athletes > 1 ? 'Turn it sideways. Each athlete stands in their own section of the screen.' : 'Upright or sideways both work; sideways gives more room.'}</li>
-          <li>Stand on the marker until it turns green. Hips, legs and feet must stay in view for the whole jump.</li>
+          <li>Put the phone on the ground on its side, leaning back about ${TILTS.landscape.target}°, so it looks up at the athletes from 2 to 3 m away. Prop it so it cannot move. (Upright, lean it back about ${TILTS.portrait.target}°.)</li>
+          <li>Use the 0.5× wide camera. The app picks it for the live camera when the phone has one; for a video, record at 0.5×.</li>
+          <li>${state.athletes > 1 ? 'Each athlete stands in their own section of the screen, on' : 'Stand on'} the marker until it turns green. Hips, legs and feet must stay in view for the whole jump.</li>
           <li>Jump and land on the same spot, with your legs as straight as they were at takeoff.</li>
         </ol>
       </div>
@@ -274,7 +275,7 @@ async function startCamera(facing) {
   state.file = null;
   state.facing = facing;
   try {
-    const info = await state.source.openCamera({ facing });
+    const info = await state.source.openCamera({ facing, wide: state.wide });
     state.opening = false;
     await enterLive(info);
   } catch (e) {
@@ -461,8 +462,8 @@ function buildPanel() {
     <p class="form-error" id="live-error" role="alert" hidden></p>
     <p class="notice small" id="turn" hidden>Turn the phone sideways so each athlete gets a wider section.</p>
     ${state.fileMode ? '' : `<div class="tilt" id="tilt">
-      <div class="tilt-bar" aria-hidden="true"><i class="tilt-zone"></i><i class="tilt-mark" id="tilt-mark"></i></div>
-      <span id="tilt-text">Phone on the ground, leaning back about ${TILT.target}°.</span>
+      <div class="tilt-bar" aria-hidden="true"><i class="tilt-zone" id="tilt-zone"></i><i class="tilt-mark" id="tilt-mark"></i></div>
+      <span id="tilt-text"></span>
     </div>`}
     <section class="card result-card" id="result-card"></section>
     <p class="notice small" id="fps-warn" hidden>The phone is processing few frames per second, so results will be less precise.</p>
@@ -475,13 +476,16 @@ function buildPanel() {
       <p class="fps" id="fps"></p>
     </section>
     <div class="bar">
-      ${state.fileMode ? '' : '<button class="btn secondary" id="flip">Flip camera</button>'}
+      ${state.fileMode ? '' : '<button class="btn secondary" id="flip">Flip camera</button><button class="btn secondary" id="lens" hidden></button>'}
       <button class="btn" id="done">Done</button>
     </div>`;
   bindUnitToggle(panel);
   $('#done').onclick = finish;
   const flip = $('#flip');
-  if (flip) flip.onclick = flipCamera;
+  if (flip) flip.onclick = () => reopenCamera({ facing: state.facing === 'environment' ? 'user' : 'environment' });
+  const lens = $('#lens');
+  if (lens) lens.onclick = () => reopenCamera({ wide: !state.wide });
+  renderLens();
   if (state.fileMode) {
     $('#file-go').onclick = runFile;
   }
@@ -648,16 +652,40 @@ function onTilt(ev) {
   if (now - (state.tiltUi || 0) > 150) { state.tiltUi = now; renderTilt(); }
 }
 
+// Sideways or upright: the recommended tilt differs.
+const isLandscape = () => {
+  const a = screen.orientation?.angle ?? window.orientation;
+  return a == null ? window.matchMedia('(orientation: landscape)').matches : Math.abs(a) % 180 === 90;
+};
+
 function renderTilt() {
   const box = $('#tilt');
   if (!box) return;
+  const land = isLandscape();
+  const { target, low, high } = tiltFor(land);
   const t = state.tilt;
-  if (!t) { box.className = 'tilt'; return; } // no sensor (or not allowed): the written tip stays
-  const { ok, text } = placementAdvice(t.elevation, t.roll);
-  box.className = `tilt live ${ok ? 'ok' : 'off'}`;
-  $('#tilt-text').textContent = `${Math.round(t.elevation)}° · ${text}`;
   // The bar runs from lying flat (0°) to upright (90°); the zone marks the good range.
+  const zone = $('#tilt-zone');
+  zone.style.left = `${(low / 90) * 100}%`;
+  zone.style.width = `${((high - low) / 90) * 100}%`;
+  if (!t) { // no sensor (or not allowed): a written tip instead
+    box.className = 'tilt';
+    $('#tilt-text').textContent = `Phone on the ground${land ? ' on its side' : ''}, leaning back about ${target}°.`;
+    return;
+  }
+  const { ok, text } = placementAdvice(t.elevation, t.roll, land);
+  box.className = `tilt live ${ok ? 'ok' : 'off'}`;
+  $('#tilt-text').textContent = `${Math.round(t.elevation)}° (aim for about ${target}°) · ${text}`;
   $('#tilt-mark').style.left = `${Math.max(0, Math.min(100, (t.elevation / 90) * 100))}%`;
+}
+
+// Which rear lens is in use, and a way to switch when the phone has a 0.5x one.
+function renderLens() {
+  const btn = $('#lens');
+  if (!btn) return;
+  const src = state.source;
+  btn.hidden = state.facing !== 'environment' || !src.hasWide;
+  btn.textContent = src.lens === 'wide' ? 'Use 1× lens' : 'Use 0.5× lens';
 }
 
 // With two or three athletes the picture should be wide, not tall.
@@ -665,7 +693,7 @@ function renderTurn() {
   const el = $('#turn');
   if (el) el.hidden = state.fileMode || state.lanes.length < 2 || !window.matchMedia('(orientation: portrait)').matches;
 }
-window.matchMedia('(orientation: portrait)').addEventListener?.('change', renderTurn);
+window.matchMedia('(orientation: portrait)').addEventListener?.('change', () => { renderTurn(); renderTilt(); });
 
 function renderFps() {
   const el = $('#fps');
@@ -676,7 +704,7 @@ function renderFps() {
   const fileFps = state.fileMode && state.source.fps;
   el.textContent = state.fileMode
     ? (fileFps ? `Video: ${fileFps} frames per second${state.rate > 1 ? `, slowed ${state.rate}× (recorded at ${fileFps * state.rate})` : ''}` : '')
-    : (state.fps ? `${state.source.fps ? `Camera: ${Math.round(state.source.fps)} frames per second · p` : 'P'}rocessing ${state.fps.toFixed(0)}${state.source.fps ? '' : ' frames per second'}` : '');
+    : (state.fps ? `${state.source.fps ? `${state.source.lens === 'wide' ? '0.5× camera' : 'Camera'}: ${Math.round(state.source.fps)} frames per second · p` : 'P'}rocessing ${state.fps.toFixed(0)}${state.source.fps ? '' : ' frames per second'}` : '');
   // Only the live camera is affected: a file is processed frame by frame at its own pace.
   if (warn) {
     warn.hidden = state.fileMode || !state.fps || state.frames < 15 || state.fps >= LOW_FPS;
@@ -717,14 +745,16 @@ async function restartFile() {
   beginRun();
 }
 
-async function flipCamera() {
-  const next = state.facing === 'environment' ? 'user' : 'environment';
-  const btn = $('#flip');
-  btn.disabled = true;
+// Switch camera (front/rear) or rear lens (0.5x/1x) without leaving the session.
+async function reopenCamera({ facing = state.facing, wide = state.wide } = {}) {
+  const buttons = [$('#flip'), $('#lens')].filter(Boolean);
+  buttons.forEach((b) => { b.disabled = true; });
+  const before = { facing: state.facing, wide: state.wide };
   try {
     state.source.stop();
-    const info = await state.source.openCamera({ facing: next });
-    state.facing = next;
+    const info = await state.source.openCamera({ facing, wide });
+    state.facing = facing;
+    state.wide = wide;
     state.lanes.forEach((l) => { l.detector.reset(); l.entry = null; l.status = null; l.hint = null; });
     state.tilt = null; // the two cameras point opposite ways
     sizeStage(info);
@@ -734,14 +764,16 @@ async function flipCamera() {
     // If the model is still loading, enterLive starts the frames when it is ready.
     if (state.pose) { state.source.start(onFrame); state.running = true; }
   } catch (e) {
-    if (e?.name === 'SupersededError' || state.mode !== 'live') return; // Done was tapped mid-flip
+    if (e?.name === 'SupersededError' || state.mode !== 'live') return; // Done was tapped meanwhile
     setError(cameraMessage(e));
     try {
-      await state.source.openCamera({ facing: state.facing });
+      await state.source.openCamera(before);
       if (state.pose) { state.source.start(onFrame); state.running = true; }
     } catch { /* leave the error showing */ }
   }
-  btn.disabled = false;
+  buttons.forEach((b) => { b.disabled = false; });
+  renderLens();
+  renderTilt();
 }
 
 // Measures everything recorded from the file so far: finds the play rate and the jumps.
