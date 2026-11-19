@@ -58,7 +58,7 @@ export class VideoSource {
 
   // Call onFrame(video, t) once per new video frame until stop(); t is seconds.
   // The next frame is requested only after onFrame returns, so slow pose
-  // inference makes us skip frames instead of queueing them.
+  // inference on a live camera makes us skip frames instead of queueing them.
   start(onFrame) {
     this.onFrame = onFrame;
     this.running = true;
@@ -88,11 +88,16 @@ export class VideoSource {
     // Never emit a non-increasing t (repeated frame, seek back, clock quirk).
     if (t > this.lastT && this.video.readyState >= 2) {
       this.lastT = t;
+      // A file is held on this frame while it is processed, so slow pose
+      // inference costs time instead of frames: every frame of the clip is
+      // measured. A live camera can't wait, so there frames are skipped.
+      if (!this.live) this.video.pause();
       try {
         await this.onFrame?.(this.video, t);
       } catch (e) {
         console.error(e);
       }
+      if (!this.live && this.running && !this.video.ended) this.video.play().catch(() => {});
     }
     this.schedule();
   }
