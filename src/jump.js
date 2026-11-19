@@ -24,10 +24,12 @@ const DEFAULTS = {
   maxGap: 0.25, // s; longest tracking gap tolerated inside a flight
   noPersonAfter: 0.4, // s without a visible person before reporting 'no-person'
   postWindow: 0.25, // s of ground contact after landing used to confirm it
-  fitSamples: 3, // in-flight samples used for the first guess of each ground crossing
-  airSpan: 0.15, // s of samples after takeoff / before landing used to refine the crossing
+  wholeFrac: 0.15, // whole-flight fit uses foot samples above this fraction of the peak rise
+  rigidTol: 0.02, // ...when the feet stay within this (× bodyLen) of the hips' free-fall curve
+  fitSamples: 3, // hinge fallback: in-flight samples for the first guess of each crossing,
+  airSpan: 0.15, // s of samples in the air (at least minAir)
   minAir: 3,
-  groundSpan: 0.1, // s of samples on the ground side
+  groundSpan: 0.1, // s of samples on the ground (at least 2)
   groundPrior: 1, // weight (in samples) pulling the local ground level towards the baseline
   levelNote: 0.02, // landing foot level vs takeoff (× bodyLen): note above this,
   levelReject: 0.06, // reject above this (stepped onto/off something, walked)
@@ -192,9 +194,12 @@ export class JumpDetector {
     // Landing level vs takeoff level: a jump lands where it took off. A different level
     // means stepping onto/off something or walking. A small shift (landing a bit forward)
     // is tolerated: the landing crossing is solved against the level the feet settle at.
-    const ground = { l: median(post.map((q) => q.l)), r: median(post.map((q) => q.r)) };
+    // Only trust the post-landing level when it clearly differs: right after landing the
+    // pose model's smoothing still lags (feet read a little high for a few hundred ms).
+    let ground = { l: median(post.map((q) => q.l)), r: median(post.map((q) => q.r)) };
     const shift = Math.max(Math.abs(ground.l - b.l), Math.abs(ground.r - b.r)) / b.L;
     if (shift > o.levelReject) return fail('Landed at a different level from takeoff');
+    if (shift <= o.levelNote) ground = b;
 
     // Hips are close to the centre of mass, so in flight they follow y = a + bτ + cτ²
     // with 2c = g in image units. The fit gives the apex time and the image scale.
@@ -210,26 +215,49 @@ export class JumpDetector {
       tApex = tm;
     }
 
-    // Sub-frame ground crossings, per foot (the last foot off is takeoff, the first foot
-    // down is landing). Model: a "hinge" in the foot's height above its ground level,
-    //   u = p0 on the ground,  u = p0 + q·τ − c·τ² in the air  (τ = time since contact loss),
-    // i.e. free fall with the curvature c measured on the hips, so only the contact time and
-    // the foot's velocity are free. It is fitted by least squares to every sample within
-    // a short window (ground samples pin down where the hinge is, air samples its slope),
-    // and the contact time is found by a fine 1-D search. Why this, from simulations:
-    //  - plain threshold crossings are late by margin/velocity (~30 ms) and frame-quantised;
-    //  - extrapolating only the samples above the margin works but must reach back a long
-    //    way from 2–3 noisy points;
-    //  - one parabola through the whole foot path (or anchored at the hips' apex) is the
-    //    least noisy but badly biased when knees tuck in flight (feet rise faster than hips).
-    // p0 is the local ground level shrunk towards the standing baseline: just before takeoff
-    // only the toe touches, and its level differs slightly from the flat-foot baseline.
+    // Sub-frame ground crossings, per foot: takeoff = last foot off, landing = first foot
+    // down. Threshold crossings are useless as they stand: late by margin/velocity (~30 ms)
+    // and frame-quantised. Two estimators, chosen per jump:
+    //
+    // 1. Whole-flight parabola (preferred). Fit u(t) = k0 + k1·τ + k2·τ² to every sample of
+    //    the foot whose rise exceeds wholeFrac of its peak, and intersect with the ground
+    //    level (standing baseline for takeoff, settled post-landing level for landing). It
+    //    averages the most samples, and it is the most robust to the pose model's own
+    //    adaptive smoothing, which lags the first frames after takeoff from rest and the
+    //    slow frames near the apex: on a real MediaPipe trace with known 0.600 s flight it
+    //    gives 0.600 s where edge-based methods give 0.58–0.62 s. Valid only while the leg
+    //    posture is fixed in flight, so it is used when each foot's fitted curvature agrees
+    //    with the hips' (free fall) within rigidTol.
+    // 2. Hinge fit (fallback, when knees tuck or legs fold in flight so the feet do not follow
+    //    a parabola). Near each crossing:  u = p0 on the ground,  u = p0 + q·τ − c·τ² in the
+    //    air (τ = time since contact loss, c = the hips' free-fall curvature), fitted by least
+    //    squares over a short window (ground samples pin the hinge, air samples its slope)
+    //    with a fine 1-D search for the contact time. p0 is shrunk towards the baseline
+    //    (just before takeoff only the toe touches). In simulation a whole-flight fit is
+    //    biased ~4 cm low by a 15 cm knee tuck; the hinge ~1 cm.
+    const span = S.filter((q) => q.t >= f.start - 0.3 && q.t < until);
+    const whole = (foot) => {
+      const lift = (q) => b[foot] - q[foot];
+      let i = span.findIndex((q) => q.t >= tApex);
+      if (i < 0) i = span.length - 1;
+      const thr = o.wholeFrac * Math.max(...span.map(lift));
+      let lo = i, hi = i; // contiguous run around the apex above the threshold
+      while (span[lo - 1] && lift(span[lo - 1]) > thr) lo--;
+      while (span[hi + 1] && lift(span[hi + 1]) > thr) hi++;
+      const pts = span.slice(lo, hi + 1);
+      if (pts.length < 4) return null;
+      const [k0, k1, k2] = polyfit(pts.map((q) => q.t - tm), pts.map(lift), 2);
+      const root = (level, sgn) => tm + (-k1 + sgn * Math.sqrt(k1 * k1 - 4 * k2 * (k0 - level))) / (2 * k2);
+      // How far the foot strayed from the hips' free fall over the fitted span (posture change).
+      const bend = Math.abs(k2 + c) * ((pts.at(-1).t - pts[0].t) / 2) ** 2 / b.L;
+      return { up: root(0, 1), down: root(b[foot] - ground[foot], -1), bend };
+    };
     const m = b.margin * b.L;
-    const cross = (foot, rising) => {
+    const hinge = (foot, rising) => {
       const g0 = rising ? b[foot] : ground[foot], sgn = rising ? 1 : -1;
       const okSide = (q) => (rising ? q.t < tApex : q.t > tApex && q.t < until);
-      // First guess: extrapolate the in-flight samples nearest the crossing (same model,
-      // ground at p0 = 0) from the foot's own run above the margin; it centres the window.
+      // First guess, to centre the window: the same model with p0 = 0 through the first
+      // fitSamples samples of the foot's own run above the margin.
       let i = S.indexOf(rising ? air[0] : air.at(-1));
       while (S[i - sgn] && g0 - S[i - sgn][foot] > m && okSide(S[i - sgn])) i -= sgn;
       const run = [];
@@ -242,13 +270,12 @@ export class JumpDetector {
         if (disc >= 0) t0 = t1 + (q - sgn * Math.sqrt(disc)) / (2 * c);
         t0 = t1 - sgn * Math.min(0.2, Math.max(0, sgn * (t1 - t0)));
       }
-      // Refine with the hinge fit.
-      // Window: groundSpan on the ground side; airSpan in the air, but at least minAir samples
-      // so the slope is always determined (at 15 fps 0.15 s may hold only one).
-      const side = (inAir, span, min) => {
+      // Window: groundSpan / airSpan either side, but at least 2 ground and minAir air
+      // samples so both parts are always determined (at 15 fps a span may hold one).
+      const side = (inAir, len, min) => {
         const a = S.filter((q) => okSide(q) && (sgn * (q.t - t0) > 0) === inAir);
         if (rising !== inAir) a.reverse(); // nearest first
-        return a.slice(0, Math.max(min, a.filter((q) => Math.abs(q.t - t0) < span).length));
+        return a.slice(0, Math.max(min, a.filter((q) => Math.abs(q.t - t0) < len).length));
       };
       const pts = [...side(false, o.groundSpan, 2), ...side(true, o.airSpan, o.minAir)].map((q) => [q.t, g0 - q[foot]]);
       let best = Infinity, bestT = t0;
@@ -261,15 +288,17 @@ export class JumpDetector {
           if (tau > 0) { sxy += tau * (u - p0 + c * tau * tau); sxx += tau * tau; } else cost += (u - p0) ** 2;
         }
         if (!sxx) continue;
-        const q = sxy / sxx;
+        const q = sxy / sxx; // best foot velocity for this contact time
         for (const [t, u] of pts) { const tau = sgn * (t - tc); if (tau > 0) cost += (u - p0 - q * tau + c * tau * tau) ** 2; }
         if (cost < best) { best = cost; bestT = tc; }
       }
-      if (o.debug) console.log(foot, rising, 't0', t0.toFixed(3), 'best', bestT.toFixed(3), 'apex', tApex.toFixed(3), pts.map(([t, u]) => `${t.toFixed(3)}:${(u / b.L).toFixed(3)}`).join(' '));
       return bestT;
     };
-    const takeoffT = Math.max(cross('l', true), cross('r', true)); // last foot off
-    const landingT = Math.min(cross('l', false), cross('r', false)); // first foot down
+    const W = [whole('l'), whole('r')];
+    const rigid = hipFit && W.every((w) => w && w.bend < o.rigidTol && Number.isFinite(w.up + w.down));
+    if (o.debug) console.log('rigid', rigid, W, 'ground', ground, 'base', b, 'tApex', tApex, 'c', c);
+    const takeoffT = rigid ? Math.max(W[0].up, W[1].up) : Math.max(hinge('l', true), hinge('r', true));
+    const landingT = rigid ? Math.min(W[0].down, W[1].down) : Math.min(hinge('l', false), hinge('r', false));
     const T = landingT - takeoffT;
     if (!(T >= o.minFlight && T <= o.maxFlight)) return fail('Flight time not plausible for a jump');
 

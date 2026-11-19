@@ -158,11 +158,31 @@ function glitch(cfg, ctx) {
   };
 }
 
+// One-Euro filter, the adaptive low-pass MediaPipe's pose landmarker applies to landmarks
+// in video mode (its defaults: min_cutoff 0.05 Hz, beta 80, derivative cutoff 1 Hz, on
+// coordinates divided by the person's size). Near-still landmarks are smoothed very hard
+// (lag at takeoff from rest and plateaus at the apex); fast ones pass almost untouched.
+export function oneEuro({ minCutoff = 0.05, beta = 80, dCutoff = 1 } = {}) {
+  let x = null, dx = 0, tPrev = 0;
+  const alpha = (cutoff, dt) => 1 / (1 + 1 / (2 * Math.PI * cutoff * dt));
+  const f = (value, t, scale) => {
+    const v = value / scale;
+    if (x === null || !(t > tPrev)) { x = v; dx = 0; tPrev = t; return value; }
+    const dt = t - tPrev;
+    tPrev = t;
+    dx += alpha(dCutoff, dt) * ((v - x) / dt - dx);
+    x += alpha(minCutoff + beta * Math.abs(dx), dt) * (v - x);
+    return x * scale;
+  };
+  f.reset = () => { x = null; };
+  return f;
+}
+
 const SEGMENTS = { stand, jump, walk, squat, calfRaise, stepUp, dropout, glitch };
 
 export function simulate(opts = {}) {
   const o = {
-    seed: 1, fps: 30, jitter: 0.25, drop: 0.03, tNoise: 0.001, noise: 0.008, distance: 3, t0: 0,
+    seed: 1, fps: 30, jitter: 0.25, drop: 0.03, tNoise: 0.001, noise: 0.008, distance: 3, t0: 0, smoothing: {},
     script: [{ type: 'stand', dur: 1.5 }, { type: 'jump' }, { type: 'stand', dur: 1 }], ...opts,
   };
   const rand = rng(o.seed);
@@ -188,11 +208,15 @@ export function simulate(opts = {}) {
   // Sample it.
   const samples = [];
   const dt = 1 / o.fps;
+  // smoothing: options for oneEuro(), or null for raw landmarks.
+  const filt = Object.fromEntries(['heelL', 'toeL', 'heelR', 'toeR', 'hip'].map((k) => [k, o.smoothing ? oneEuro(o.smoothing) : null]));
+  const sm = (k, v, t, scale) => (filt[k] ? filt[k](v, t, scale) : v);
   for (let time = 0; time < total; time += dt * (1 + o.jitter * (2 * rand() - 1))) {
     if (rand() < o.drop) continue;
     const p = poseAt(time);
     const tr = o.t0 + time + o.tNoise * rand.normal();
     if (p.visible === false) {
+      Object.values(filt).forEach((f) => f?.reset());
       samples.push({ t: tr, footL: NaN, footR: NaN, hipY: NaN, bodyLen: NaN, visible: false });
       continue;
     }
@@ -203,11 +227,12 @@ export function simulate(opts = {}) {
     const bodyLen = (shoulder - ankle) / scale;
     const sd = o.noise * ((SHOULDER - ANKLE) / scale); // landmark noise as a fraction of standing body length
     const n = () => sd * rand.normal();
-    const foot = (f) => Math.max(y(f.heel) + n(), y(f.toe) + n()); // lowest point = max of heel/toe y
-    samples.push({
-      t: tr, footL: foot(p.feet.L), footR: foot(p.feet.R),
-      hipY: y(p.hip) + n() / Math.SQRT2, bodyLen: bodyLen + n(), visible: true,
-    });
+    const size = (SHOULDER - ANKLE) / scale;
+    const lm = (k, z, s = 1) => sm(k, y(z) + s * n(), tr, size);
+    // lowest point of each foot = max of heel/toe y
+    const footL = Math.max(lm('heelL', p.feet.L.heel), lm('toeL', p.feet.L.toe));
+    const footR = Math.max(lm('heelR', p.feet.R.heel), lm('toeR', p.feet.R.toe));
+    samples.push({ t: tr, footL, footR, hipY: lm('hip', p.hip, Math.SQRT1_2), bodyLen: bodyLen + n(), visible: true });
   }
   for (let i = 1; i < samples.length; i++) if (samples[i].t <= samples[i - 1].t) samples[i].t = samples[i - 1].t + 1e-4;
   return { samples, truth, duration: total };
