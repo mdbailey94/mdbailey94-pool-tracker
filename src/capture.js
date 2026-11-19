@@ -27,6 +27,8 @@ export class VideoSource {
     this.url = null;
     this.live = false;
     this.fps = null; // negotiated camera frame rate; null for files
+    this.lens = 'standard'; // 'wide' when the rear 0.5x camera is in use
+    this.hasWide = false; // whether this phone offers one
     this.running = false;
     this.onFrame = null;
     this.handle = null;
@@ -35,18 +37,49 @@ export class VideoSource {
 
   // facing: 'environment' (rear) | 'user' (front). Both are "ideal", so a
   // device without that camera still opens whatever it has.
-  async openCamera({ facing = 'environment' } = {}) {
+  // wide: use the rear 0.5x wide camera when the phone has one. With the phone on the
+  // ground it takes in the floor and the top of the jump at a much shallower tilt.
+  async openCamera({ facing = 'environment', wide = true } = {}) {
     this.close();
     const gen = this.gen;
-    const stream = await navigator.mediaDevices.getUserMedia({
-      audio: false,
-      video: { facingMode: { ideal: facing }, width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 60 } },
-    });
-    // close() or another open happened while the permission prompt was up:
-    // this stream has no owner, so stop it or the camera light stays on.
-    if (gen !== this.gen) {
-      stream.getTracks().forEach((t) => t.stop());
+    const orphaned = (s) => {
+      // close() or another open happened while this was waiting: the stream has no
+      // owner, so stop it or the camera light stays on.
+      if (gen === this.gen) return false;
+      s.getTracks().forEach((t) => t.stop());
       throw Object.assign(new Error('Camera request was superseded'), { name: 'SupersededError' });
+    };
+    const want = { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 60 } };
+    let stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: { facingMode: { ideal: facing }, ...want } });
+    orphaned(stream);
+    this.lens = 'standard';
+    this.hasWide = false;
+    if (facing === 'environment') {
+      // Camera names are only readable once permission is given, so the wide lens is
+      // looked for now and, if wanted, swapped in.
+      let track = stream.getVideoTracks()[0];
+      const ultra = findWideCamera(await navigator.mediaDevices.enumerateDevices().catch(() => []));
+      const zoom = track.getCapabilities?.().zoom;
+      const canZoomOut = Boolean(zoom && zoom.min < 1);
+      this.hasWide = Boolean(ultra) || canZoomOut;
+      if (wide && ultra && ultra.deviceId !== track.getSettings().deviceId) {
+        let s2 = null;
+        try {
+          s2 = await navigator.mediaDevices.getUserMedia({ audio: false, video: { deviceId: { exact: ultra.deviceId }, ...want } });
+        } catch { /* keep the standard lens */ }
+        if (s2) {
+          stream.getTracks().forEach((t) => t.stop());
+          stream = s2;
+          track = stream.getVideoTracks()[0];
+          this.lens = 'wide';
+        }
+      } else if (wide && ultra) {
+        this.lens = 'wide';
+      } else if (wide && canZoomOut) {
+        // Phones that present their rear lenses as one camera: zoom out as far as it goes.
+        try { await track.applyConstraints({ advanced: [{ zoom: zoom.min }] }); this.lens = 'wide'; } catch { /* keep 1x */ }
+      }
+      orphaned(stream);
     }
     this.stream = stream;
     this.video.playbackRate = 1;
@@ -180,6 +213,13 @@ export class VideoSource {
     this.video.removeAttribute('src');
     this.video.srcObject = null;
   }
+}
+
+// The rear 0.5x camera, from the browser's device list, or undefined. iPhones call it
+// "Back Ultra Wide Camera"; the combined "Dual Wide" and "Triple" cameras are not it.
+export function findWideCamera(devices) {
+  return (devices || []).find((d) => d.kind === 'videoinput' && d.deviceId
+    && /ultra[\s-]*wide/i.test(d.label || '') && !/front|user|selfie/i.test(d.label || ''));
 }
 
 // Keep the screen on while tracking (where supported).

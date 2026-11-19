@@ -1,8 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  assignLanes, cameraElevation, cameraRoll, framingHint, laneBounds, laneOf, placementAdvice,
+  assignLanes, cameraElevation, cameraRoll, framingHint, horizonTilt, laneBounds, laneOf, placementAdvice, tiltFor,
 } from '../src/lanes.js';
+import { findWideCamera } from '../src/capture.js';
 
 // A standing body: 33 landmarks with the legs filled in, hips at (cx, hipY), body
 // scaled by `size` (thigh + shank, in frame heights). aspect 16:9 unless said.
@@ -85,12 +86,36 @@ test('cameraRoll: 0 when the picture is level, either way round', () => {
   near(cameraRoll(0, -90, 90), 0, 'screen angle reported the other way still reads level');
   near(cameraRoll(0, 135, 90), 0, 'landscape, leaning back, level');
   assert.ok(Math.abs(Math.abs(cameraRoll(10, 90, 90)) - 10) < 1e-6, 'landscape with one end 10 degrees up');
+  // The gauge's version needs no screen angle: level reads 0 upright or on its side,
+  // leaning back or not, and a tilt reads the same either way.
+  for (const [b, g] of [[90, 0], [135, 0], [105, 0], [0, 90], [0, -90], [0, 105], [0, 135]]) near(horizonTilt(b, g), 0, `level at beta ${b} gamma ${g}`);
+  assert.ok(Math.abs(Math.abs(horizonTilt(10, 90)) - 10) < 1e-6, 'on its side, one end 10 degrees up');
+  assert.ok(Math.abs(Math.abs(horizonTilt(90, 8)) - 0) < 1e-6, 'upright, turned about the vertical: still level');
 });
 
-test('placementAdvice: about 45 degrees and level is good', () => {
+test('placementAdvice: about 15 degrees on its side, about 45 upright, and level', () => {
+  // On its side (landscape, 0.5x camera).
+  assert.equal(placementAdvice(15, 0, true).ok, true);
+  assert.equal(placementAdvice(22, 0, true).ok, true);
+  assert.match(placementAdvice(4, 0, true).text, /back more/);
+  assert.match(placementAdvice(45, 0, true).text, /up more/); // good upright, too far back on its side
+  assert.match(placementAdvice(15, 9, true).text, /Level/);
+  // Upright (portrait): the default.
   assert.equal(placementAdvice(45, 0).ok, true);
-  assert.match(placementAdvice(10, 0).text, /back more/);
-  assert.match(placementAdvice(80, 0).text, /up more/);
-  assert.match(placementAdvice(45, 9).text, /Level/);
-  assert.equal(placementAdvice(NaN, 0).text, '');
+  assert.match(placementAdvice(15, 0).text, /back more/);
+  assert.match(placementAdvice(80, 0, false).text, /up more/);
+  assert.equal(placementAdvice(NaN, 0, true).text, '');
+  assert.deepEqual([tiltFor(true).target, tiltFor(false).target], [15, 45]);
+});
+
+test('findWideCamera: picks the rear 0.5x camera by name', () => {
+  const cam = (label, deviceId = label) => ({ kind: 'videoinput', label, deviceId });
+  const iphone = [cam('Front Camera'), cam('Back Triple Camera'), cam('Back Dual Wide Camera'), cam('Back Ultra Wide Camera'), cam('Back Camera'), cam('Back Telephoto Camera'), { kind: 'audioinput', label: 'Ultra Wide Microphone', deviceId: 'm' }];
+  assert.equal(findWideCamera(iphone).label, 'Back Ultra Wide Camera');
+  assert.equal(findWideCamera([cam('Back Ultra-Wide Camera')]).label, 'Back Ultra-Wide Camera');
+  assert.equal(findWideCamera([cam('Front Ultra Wide Camera'), cam('Back Camera')]), undefined);
+  assert.equal(findWideCamera([cam('camera2 0, facing back'), cam('camera2 1, facing front')]), undefined);
+  // Before permission is given the names are blank.
+  assert.equal(findWideCamera([{ kind: 'videoinput', label: '', deviceId: '' }]), undefined);
+  assert.equal(findWideCamera(undefined), undefined);
 });

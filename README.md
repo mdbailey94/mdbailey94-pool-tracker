@@ -7,8 +7,9 @@ sessions on your device only. There are no accounts and no uploads.
 ## Using it
 
 1. Choose how many athletes (1 to 3), then tap **Start camera**, or **Use a video** to analyse a recording.
-2. Put the phone on the ground, leaning back about 45°, so it looks up at the athletes from 2 to 3 m away.
-   Prop it so it cannot move. With two or three athletes, turn it sideways.
+2. Put the phone on the ground on its side, leaning back about 15°, so it looks up at the athletes from
+   2 to 3 m away. Use the 0.5× wide camera: the app picks it for the live camera when the phone has one, and
+   a button switches between 0.5× and 1×. Prop the phone so it cannot move. (Upright, lean it back about 45°.)
 3. Each athlete stands in their own section of the screen, on the marker. The marker and the label above it
    say what to fix (step back, come closer, move to the middle) and turn green when the athlete is placed well
    and standing still.
@@ -18,9 +19,10 @@ sessions on your device only. There are no accounts and no uploads.
 6. Tap **Done** to save the session. Past sessions can be reviewed and exported as CSV, with a column for the
    athlete.
 
-On phones with a motion sensor, a gauge shows how far the phone is leaning back and whether it is level.
-About 45° is a starting point: the right angle depends on the lens and the distance, so the stand-here
-prompts have the last word. If they say the feet are cut off, lean the phone forward a little or move it back.
+On phones with a motion sensor, a gauge shows how far the phone is leaning back and whether it is level. It
+aims for about 15° when the phone is on its side and about 45° when it is upright. These are starting points:
+the right angle depends on the lens and the distance, so the stand-here prompts have the last word. If they
+say the feet are cut off, lean the phone forward a little or move it back.
 
 ### Using a video
 
@@ -30,7 +32,7 @@ to set: the app works out the video's frame rate and, for slow motion, how much 
 What works best:
 
 - 120 frames per second. On an iPhone that is Slo-mo at 1080p, 120 fps. Ordinary 60 fps video is next best.
-- The phone propped up or held very still, level with the hips, 2 to 4 m away.
+- The phone on the ground on its side, leaning back about 15°, filming at 0.5×, 2 to 3 m away. Propped still.
 - Hips, legs and feet in view for the whole jump, with room above the hips.
 - About a second of standing still before the jump or after the landing. One of the two is enough.
 - Take off and land on the same spot.
