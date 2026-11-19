@@ -39,6 +39,18 @@ effect. Each jump gets a confidence rating, and the screen explains why when it 
 
 Accuracy on real people has not been validated yet. Treat the numbers as an estimate. Before relying on
 them, compare against a known measure, such as a jump mat or a wall reach test, and see how far apart they are.
+
+What has been checked:
+
+- Simulated jumps (15 to 80 cm, with landmark jitter, uneven frame timing and dropped frames): the average
+  error is about 0.6 cm at 60 frames per second and 0.9 cm at 30, with worst cases of about 2 cm and 4 cm.
+  Short jumps at low frame rates are the least precise.
+- Test clips with a known flight time, run through the whole app with the real pose model: readings were
+  between 0.1 cm low and 2.1 cm high. The clips are a photo of a person moved along a gravity arc, so they
+  test timing but not real body movement.
+- Below about 8 frames per second the app cannot time a jump live. Use a recorded video instead: every frame
+  of a file is measured, however slow the device.
+
 Results are better with steady lighting, a still phone, a plain background, tight clothing and a high frame
 rate. The app shows the frames per second it is processing and warns if that falls below about 20.
 

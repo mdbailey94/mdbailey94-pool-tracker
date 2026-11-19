@@ -25,16 +25,17 @@ const DEFAULTS = {
   noPersonAfter: 0.4, // s without a visible person before reporting 'no-person'
   postWindow: 0.25, // s of ground contact after landing used to confirm it
   wholeFrac: 0.15, // whole-flight fit uses foot samples above this fraction of the peak rise
-  rigidTol: 0.02, // ...when the feet stay within this (× bodyLen) of the hips' free-fall curve
+  rigidTol: 0.03, // ...when the feet stay within this (× bodyLen) of the hips' free-fall curve
   fitSamples: 3, // hinge fallback: in-flight samples for the first guess of each crossing,
   airSpan: 0.15, // s of samples in the air (at least minAir)
   minAir: 3,
   groundSpan: 0.1, // s of samples on the ground (at least 2)
   groundPrior: 1, // weight (in samples) pulling the local ground level towards the baseline
+  riseFactor: 2, // glitch check: feet may rise at most this × takeoff speed next to a crossing
   levelNote: 0.02, // landing foot level vs takeoff (× bodyLen): note above this,
   levelReject: 0.06, // reject above this (stepped onto/off something, walked)
-  dropNote: 0.03, // hips lower (m) at landing than at takeoff: note above this,
-  dropLow: 0.08, // low confidence above this
+  dropNote: 0.05, // hips lower (m) at landing than at takeoff: note above this,
+  dropLow: 0.1, // low confidence above this
   bodyRange: [0.6, 2.4], // plausible shoulder–ankle length (m) implied by the hips' free-fall curvature
 };
 
@@ -111,7 +112,10 @@ export class JumpDetector {
     if (this.phase === 'settling') this.trySettle(t);
     else if (this.phase === 'ready') {
       if (this.bothUp(p)) this.takeoff(p);
-      else this.checkDrift(t);
+      else {
+        this.checkDrift(t);
+        this.trySettle(t); // keep the baseline fresh whenever the person stands still
+      }
     } else if (this.phase === 'airborne') {
       if (!this.bothUp(p)) { this.flight.land = t; this.phase = 'landed'; }
       else if (t - this.flight.start > o.maxFlight + 0.2) this.abort('Feet never came back down (stepped up or walked away)');
@@ -222,13 +226,14 @@ export class JumpDetector {
     //
     // 1. Whole-flight parabola (preferred). Fit u(t) = k0 + k1·τ + k2·τ² to every sample of
     //    the foot whose rise exceeds wholeFrac of its peak, and intersect with the ground
-    //    level (standing baseline for takeoff, settled post-landing level for landing). It
-    //    averages the most samples, and it is the most robust to the pose model's own
-    //    adaptive smoothing, which lags the first frames after takeoff from rest and the
-    //    slow frames near the apex: on a real MediaPipe trace with known 0.600 s flight it
-    //    gives 0.600 s where edge-based methods give 0.58–0.62 s. Valid only while the leg
-    //    posture is fixed in flight, so it is used when each foot's fitted curvature agrees
-    //    with the hips' (free fall) within rigidTol.
+    //    level (the standing baseline, or the post-landing level if the person moved). It
+    //    averages the most samples and is the most robust to the pose model's own adaptive
+    //    smoothing, which lags both the first frames after takeoff from rest and the descent
+    //    by ~10 ms (the lags cancel in T, unlike at a single edge): on a real MediaPipe
+    //    trace with a known 0.600 s flight it gives 0.601 s where edge-based methods give
+    //    0.58–0.62 s. Valid only while leg posture is fixed in flight, so it is used when
+    //    each foot's curvature matches the hips' free fall to within rigidTol × bodyLen of
+    //    displacement over the fitted span.
     // 2. Hinge fit (fallback, when knees tuck or legs fold in flight so the feet do not follow
     //    a parabola). Near each crossing:  u = p0 on the ground,  u = p0 + q·τ − c·τ² in the
     //    air (τ = time since contact loss, c = the hips' free-fall curvature), fitted by least
@@ -297,11 +302,22 @@ export class JumpDetector {
     };
     const W = [whole('l'), whole('r')];
     const rigid = hipFit && W.every((w) => w && w.bend < o.rigidTol && Number.isFinite(w.up + w.down));
-    if (o.debug) console.log('rigid', rigid, W, 'ground', ground, 'base', b, 'tApex', tApex, 'c', c);
     const takeoffT = rigid ? Math.max(W[0].up, W[1].up) : Math.max(hinge('l', true), hinge('r', true));
     const landingT = rigid ? Math.min(W[0].down, W[1].down) : Math.min(hinge('l', false), hinge('r', false));
     const T = landingT - takeoffT;
     if (!(T >= o.minFlight && T <= o.maxFlight)) return fail('Flight time not plausible for a jump');
+    // Physics checks against tracking glitches (landmarks snapping up for a few frames).
+    // With takeoff speed v0 = c·T: (a) next to each margin crossing the feet can rise at
+    // most ~v0 per second (riseFactor × that allowed for legs folding); (b) the feet need
+    // ~margin/v0 to clear the margin, so takeoff/landing cannot lie further than that
+    // beyond the samples that were still below it.
+    const v0 = c * T, pre = S[S.indexOf(air[0]) - 1], next = S[S.indexOf(air.at(-1)) + 1];
+    const lowFoot = (q) => Math.min(b.l - q.l, b.r - q.r);
+    const slack = m + 3 * b.noise * b.L, reach = slack / v0 + 0.02;
+    if ((pre && (lowFoot(air[0]) > slack + o.riseFactor * v0 * (air[0].t - pre.t) || takeoffT < pre.t - reach)) ||
+        (next && (lowFoot(air.at(-1)) > slack + o.riseFactor * v0 * (next.t - air.at(-1).t) || landingT > next.t + reach))) {
+      return fail('Tracking glitch, not a jump');
+    }
 
     // Cross-checks: lower confidence with a reason rather than silently report.
     const notes = [];
@@ -312,7 +328,11 @@ export class JumpDetector {
       const bodyM = b.L * scale;
       const [lo, hi] = o.bodyRange;
       if (bodyM < lo / 2 || bodyM > hi * 2) return fail('Body did not move like a free flight');
-      if (bodyM < lo || bodyM > hi) flag(0, 'Your body did not move like a clean free flight, so this may not be accurate');
+      if (bodyM < lo || bodyM > hi) {
+        // A tiny "hop" seen in a few frames that is not a free fall: a tracking glitch.
+        if (air.length < 6 && T < 0.25) return fail('Body did not move like a free flight');
+        flag(0, 'Your body did not move like a clean free flight, so this may not be accurate');
+      }
       const hipAt = (tt) => hipFit[0] + hipFit[1] * (tt - tm) + hipFit[2] * (tt - tm) ** 2;
       const rms = Math.sqrt(air.reduce((acc, q) => acc + (q.h - hipAt(q.t)) ** 2, 0) / air.length);
       if (rms > Math.max(4 * b.noise, 0.02) * b.L) flag(0, 'Tracking was unsteady during the jump');

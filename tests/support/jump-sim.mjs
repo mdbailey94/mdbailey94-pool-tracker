@@ -1,8 +1,15 @@
 // Jump simulator: builds a continuous physical motion (metres, seconds) from a
 // script of segments, then samples it like a phone camera + pose model would:
 // irregular frame times, dropped frames, timestamp noise, noisy heel/toe/hip
-// landmarks, perspective from camera distance. The detector only ever sees the
-// sampled landmarks, never the motion model.
+// landmarks smoothed by a MediaPipe-like One-Euro filter, perspective from camera
+// distance. The detector only ever sees the sampled landmarks, never the motion model.
+//
+// Options: seed, fps, jitter (frame interval ±fraction), drop (dropped-frame probability),
+// tNoise (timestamp sd, s), noise (landmark sd before smoothing, × body length),
+// distance (m from camera), smoothing (oneEuro options, null = raw), t0, script.
+// Segments: stand, jump {height, cmDepth, heelRise, tuck, landBend, footDelay, landDelay,
+// forward, landFloor, vanishAfter, swap}, walk {to, dur}, squat, calfRaise, stepUp,
+// dropout, glitch {dur, offset}.
 //
 //   const { samples, truth } = simulate({ seed: 1, fps: 30, noise: 0.008,
 //     script: [{ type: 'stand', dur: 1 }, { type: 'jump', height: 0.4 }, { type: 'stand', dur: 1 }] });
@@ -159,10 +166,11 @@ function glitch(cfg, ctx) {
 }
 
 // One-Euro filter, the adaptive low-pass MediaPipe's pose landmarker applies to landmarks
-// in video mode (its defaults: min_cutoff 0.05 Hz, beta 80, derivative cutoff 1 Hz, on
-// coordinates divided by the person's size). Near-still landmarks are smoothed very hard
-// (lag at takeoff from rest and plateaus at the apex); fast ones pass almost untouched.
-export function oneEuro({ minCutoff = 0.05, beta = 80, dCutoff = 1 } = {}) {
+// in video mode. Near-still landmarks are smoothed hard (lag at takeoff from rest, a
+// flattened, late apex, feet still a little high at touchdown); fast ones pass almost
+// untouched. Defaults fitted to a real MediaPipe trace of a jump with known motion
+// (min cutoff 0.05 Hz, beta 20 on coordinates divided by body length, derivative 1 Hz).
+export function oneEuro({ minCutoff = 0.05, beta = 20, dCutoff = 1 } = {}) {
   let x = null, dx = 0, tPrev = 0;
   const alpha = (cutoff, dt) => 1 / (1 + 1 / (2 * Math.PI * cutoff * dt));
   const f = (value, t, scale) => {

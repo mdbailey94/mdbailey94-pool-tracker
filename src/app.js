@@ -29,6 +29,7 @@ const STATUS_TEXT = {
 const FEET = new Set([27, 28, 29, 30, 31, 32]);
 const SPEEDS = [1, 2, 4, 8];
 const LOW_FPS = 20;
+const TOO_SLOW_FPS = 8; // below this the detector cannot learn the ground level or time a flight
 
 const state = {
   mode: 'home',
@@ -445,7 +446,12 @@ function renderFps() {
   if (!el) return;
   el.textContent = state.fps ? `Processing ${state.fps.toFixed(0)} frames per second` : '';
   // Only the live camera is affected: a file is processed frame by frame at its own pace.
-  if (warn) warn.hidden = state.fileMode || !state.fps || state.frames < 15 || state.fps >= LOW_FPS;
+  if (warn) {
+    warn.hidden = state.fileMode || !state.fps || state.frames < 15 || state.fps >= LOW_FPS;
+    warn.textContent = state.fps < TOO_SLOW_FPS
+      ? 'This device is processing too few frames per second to time a jump live. Record a video of the jump and use "Use a video" instead.'
+      : 'The phone is processing few frames per second, so results will be less precise.';
+  }
 }
 
 function updateFileControls() {
