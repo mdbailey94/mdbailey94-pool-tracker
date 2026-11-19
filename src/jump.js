@@ -13,6 +13,7 @@ export function heightFromFlightTime(T) {
 const DEFAULTS = {
   settleWindow: 0.5, // s of standing still used to learn the ground level
   minSettleSamples: 5,
+  stillHips: true, // hips must be still too while learning the ground (live); off for recordings
   stillTol: 0.025, // max robust spread / drift of feet and hips while "still" (× bodyLen)
   driftTol: 0.035, // feet this far from the baseline for driftWindow → person moved, re-settle
   driftWindow: 0.3,
@@ -175,7 +176,7 @@ export class JumpDetector {
     const L = median(w.map((q) => q.L));
     const half = w.length >> 1;
     let noise = 0;
-    for (const k of ['l', 'r', 'h']) {
+    for (const k of o.stillHips ? ['l', 'r', 'h'] : ['l', 'r']) {
       const v = w.map((q) => q[k]);
       const sd = robustSd(v);
       const drift = Math.abs(median(v.slice(0, half)) - median(v.slice(half)));
@@ -334,9 +335,10 @@ export class JumpDetector {
     const notes = [];
     let conf = 2; // 2 high, 1 medium, 0 low
     const flag = (level, note) => { conf = Math.min(conf, level); notes.push(note); };
+    let bodyM = NaN; // body length implied by gravity; says whether the clock is real time
     if (hipFit) {
       const scale = G / (2 * c); // metres per image unit
-      const bodyM = b.L * scale;
+      bodyM = b.L * scale;
       const [lo, hi] = o.bodyRange;
       if (bodyM < lo / 2 || bodyM > hi * 2) return fail('Body did not move like a free flight');
       if (bodyM < lo || bodyM > hi) {
@@ -350,8 +352,8 @@ export class JumpDetector {
       // Hips lower at touchdown than at takeoff (bent knees, tucked landing) stretch the
       // flight time and inflate the height; the reverse deflates it.
       const drop = (hipAt(landingT) - hipAt(takeoffT)) * scale;
-      if (drop > o.dropNote) flag(drop > o.dropLow ? 0 : 1, 'Landing looked lower than takeoff, so the height may be overestimated. Land with straight legs, then bend');
-      else if (drop < -o.dropNote) flag(drop < -o.dropLow ? 0 : 1, 'Takeoff looked lower than landing, so the height may be underestimated');
+      if (drop > o.dropNote) flag(drop > o.dropLow ? 0 : 1, `${NOTE_LOWER_LANDING}, so the height may be overestimated. Land with straight legs, then bend`);
+      else if (drop < -o.dropNote) flag(drop < -o.dropLow ? 0 : 1, `${NOTE_LOWER_TAKEOFF}, so the height may be underestimated`);
     } else flag(0, 'Too few video frames in the air to measure this jump reliably');
     if (air.length < 6) flag(1, `Only ${air.length} video frames in the air, so timing is coarse`);
     if (f.gaps) flag(1, 'Tracking dropped out briefly during the jump');
@@ -361,7 +363,77 @@ export class JumpDetector {
     if (shift > o.levelNote) { this.base = null; this.phase = 'settling'; } else this.phase = 'ready';
     return {
       takeoffT, landingT, flightTime: T, heightM: heightFromFlightTime(T),
-      confidence: ['low', 'medium', 'high'][conf], notes,
+      confidence: ['low', 'medium', 'high'][conf], notes, bodyM,
     };
   }
+}
+
+// ---------------------------------------------------------------- recordings
+
+// A recorded clip can be analysed with hindsight, which removes two things a live
+// stream needs from the user:
+//
+// 1. The play rate. A slow-motion clip's timestamps run k times slow, which makes
+//    gravity look k² times weak: the body length implied by the hips' free fall comes
+//    out k² times too big. Rates differ by 2×, so implied lengths differ by 4× and
+//    only the true rate gives a human-sized body. Each rate is tried; the one whose
+//    jumps imply a body nearest BODY_M wins. The rate is snapped, not estimated, so
+//    height still comes from flight time alone and not from an assumed body size.
+// 2. Standing still first. A jump looks the same played backwards, so the clip is
+//    also run in reverse: standing still after the landing then serves as the
+//    baseline, and a clip that starts mid-crouch is still measured.
+export const PLAY_RATES = [1, 2, 4, 8];
+const BODY_M = 1.35; // typical adult shoulder–ankle length
+// Clips are often trimmed tight and filmed hand-held, so less standing still is asked
+// for than live (feet only, a quarter of a second), and landing a little nearer or
+// farther from the camera is tolerated. A clip was chosen because it holds a jump, so
+// the stricter live rules against walking and stepping matter less here.
+const RECORDING = { settleWindow: 0.25, stillHips: false, levelReject: 0.12 };
+
+const NOTE_LOWER_LANDING = 'Landing looked lower than takeoff';
+const NOTE_LOWER_TAKEOFF = 'Takeoff looked lower than landing';
+
+function detectAll(samples, options) {
+  const det = new JumpDetector(options), jumps = [];
+  for (const s of samples) { const { jump } = det.push(s); if (jump) jumps.push(jump); }
+  const last = det.flush();
+  if (last) jumps.push(last);
+  return jumps;
+}
+
+// A jump found in the reversed clip, put back in forward time: takeoff and landing
+// swap, and so do the notes about which end was lower.
+function unreverse(j) {
+  const swap = (n) => (n.startsWith(NOTE_LOWER_LANDING) ? `${NOTE_LOWER_TAKEOFF}, so the height may be underestimated`
+    : n.startsWith(NOTE_LOWER_TAKEOFF) ? `${NOTE_LOWER_LANDING}, so the height may be overestimated. Land with straight legs, then bend`
+      : n);
+  return { ...j, takeoffT: -j.landingT, landingT: -j.takeoffT, notes: j.notes.map(swap) };
+}
+
+const RANK = { low: 0, medium: 1, high: 2 };
+
+// samples: [{ t, footL, footR, hipY, bodyLen, visible }] in the clip's own time.
+// Returns { rate, jumps }: rate is how many times slower than life the clip plays
+// (null when no jump was found), and jumps are in real time, in order.
+export function analyseRecording(samples, { rates = PLAY_RATES, options } = {}) {
+  options = { ...RECORDING, ...options };
+  let best = null;
+  for (const rate of rates) {
+    const fwd = detectAll(samples.map((s) => ({ ...s, t: s.t / rate })), options);
+    const rev = detectAll(samples.slice().reverse().map((s) => ({ ...s, t: -s.t / rate })), options).map(unreverse);
+    // The same jump seen in both directions: keep the more confident reading.
+    const jumps = [...fwd];
+    for (const r of rev) {
+      const i = jumps.findIndex((f) => f.takeoffT < r.landingT && r.takeoffT < f.landingT);
+      if (i < 0) jumps.push(r);
+      else if (RANK[r.confidence] > RANK[jumps[i].confidence]) jumps[i] = r;
+    }
+    if (!jumps.length) continue;
+    jumps.sort((a, b) => a.takeoffT - b.takeoffT);
+    // How far from human-sized the implied body is, in octaves; unknown counts as far.
+    const off = jumps.map((j) => (j.bodyM > 0 ? Math.abs(Math.log2(j.bodyM / BODY_M)) : 3));
+    const score = off.reduce((a, b) => a + b, 0) / off.length;
+    if (!best || score < best.score) best = { rate, jumps, score };
+  }
+  return best ? { rate: best.rate, jumps: best.jumps } : { rate: null, jumps: [] };
 }

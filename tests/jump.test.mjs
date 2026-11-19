@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
-import { G, heightFromFlightTime, JumpDetector } from '../src/jump.js';
+import { G, heightFromFlightTime, JumpDetector, analyseRecording } from '../src/jump.js';
 import { simulate, run } from './support/jump-sim.mjs';
 
 const stand = (dur = 1.5) => ({ type: 'stand', dur });
@@ -260,4 +260,57 @@ test('a jump seen in under four frames is never better than low confidence', () 
       if (frames < 4) assert.equal(j.confidence, 'low', `fps ${fps} seed ${seed}: ${frames} frames in the air but ${j.confidence}`);
     }
   }
+});
+
+// ---- recordings: analysed as a whole, so the play rate and the baseline come from hindsight
+
+const clip = ({ seed, fps, height = 0.35, before = 1.2, after = 0.8, slow = 1 }) => {
+  const { samples, truth } = simulate({ seed, fps, noise: 0.008, smoothing: {}, script: [stand(1.2), { type: 'jump', height }, stand(1)] });
+  const from = truth[0].takeoffT - 0.7 - before, to = truth[0].landingT + after; // 0.7 s ≈ the countermovement
+  return { truth: truth[0], samples: samples.filter((s) => s.t >= from && s.t <= to).map((s) => ({ ...s, t: s.t * slow })) };
+};
+
+test('recording: slow motion is recognised and gives the same height as real time', () => {
+  for (const fps of [30, 60, 120]) for (const height of [0.2, 0.4, 0.6]) for (let seed = 1; seed <= 4; seed++) {
+    const base = analyseRecording(clip({ seed: seed * 13 + fps, fps, height }).samples);
+    assert.equal(base.rate, 1, `${fps} fps ${height} m seed ${seed}: real-time clip read as ${base.rate}x`);
+    assert.equal(base.jumps.length, 1);
+    for (const slow of [2, 4, 8]) {
+      const { truth, samples } = clip({ seed: seed * 13 + fps, fps, height, slow });
+      const r = analyseRecording(samples);
+      assert.equal(r.rate, slow, `${fps} fps ${height} m seed ${seed}: ${slow}x clip read as ${r.rate}x`);
+      assert.equal(r.jumps.length, 1);
+      assert.ok(Math.abs(r.jumps[0].flightTime - base.jumps[0].flightTime) < 1e-6, 'slow motion changed the flight time');
+      assert.ok(Math.abs(r.jumps[0].heightM - truth.heightM) < 0.04, `height ${r.jumps[0].heightM} vs ${truth.heightM}`);
+      // Times are reported in real time, in order.
+      assert.ok(Math.abs(r.jumps[0].takeoffT - truth.takeoffT) < 0.05, `takeoff ${r.jumps[0].takeoffT} vs ${truth.takeoffT}`);
+    }
+  }
+});
+
+test('recording: a clip that starts mid-crouch or ends soon after landing is still measured', () => {
+  for (const fps of [30, 60, 120]) for (let seed = 1; seed <= 6; seed++) {
+    for (const [before, after] of [[0, 0.8], [-0.5, 0.8], [0.3, 0.3], [1.2, 0.05]]) {
+      const { truth, samples } = clip({ seed: seed * 29 + fps, fps, before, after });
+      const r = analyseRecording(samples);
+      assert.equal(r.jumps.length, 1, `${fps} fps seed ${seed} before ${before} after ${after}: ${r.jumps.length} jumps`);
+      assert.equal(r.rate, 1);
+      assert.ok(Math.abs(r.jumps[0].heightM - truth.heightM) < 0.04, `height ${r.jumps[0].heightM} vs ${truth.heightM}`);
+    }
+  }
+});
+
+test('recording: non-jumps give no reading at any play rate', () => {
+  for (const [name, script] of Object.entries(NON_JUMPS)) for (const fps of [30, 60, 120]) for (let seed = 1; seed <= 5; seed++) {
+    const { samples } = simulate({ seed: seed * 77 + fps, fps, noise: 0.008, smoothing: {}, script });
+    const r = analyseRecording(samples);
+    assert.equal(r.jumps.length, 0, `${name} at ${fps} fps seed ${seed}: read as a ${(r.jumps[0]?.heightM * 100).toFixed(1)} cm jump at ${r.rate}x`);
+  }
+});
+
+test('recording: repeated jumps are each reported once, in order', () => {
+  const { samples, truth } = simulate({ seed: 5, fps: 60, noise: 0.008, smoothing: {}, script: [stand(), { type: 'jump', height: 0.3 }, stand(0.6), { type: 'jump', height: 0.45 }, stand(1)] });
+  const r = analyseRecording(samples);
+  assert.equal(r.jumps.length, 2);
+  r.jumps.forEach((j, i) => assert.ok(Math.abs(j.heightM - truth[i].heightM) < 0.04, `jump ${i}: ${j.heightM} vs ${truth[i].heightM}`));
 });

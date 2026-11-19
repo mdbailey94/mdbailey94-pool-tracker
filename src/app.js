@@ -1,7 +1,7 @@
 // Jump Height UI: pick a video source, watch for jumps, keep a list, review sessions.
 
 import { VideoSource, cameraSupported, keepAwake } from './capture.js';
-import { JumpDetector } from './jump.js';
+import { JumpDetector, analyseRecording } from './jump.js';
 import {
   deleteSession, download, loadSessions, loadUnit, newSessionId, saveSession, saveUnit, sessionCSV,
 } from './store.js';
@@ -27,7 +27,6 @@ const STATUS_TEXT = {
   airborne: 'In the air…',
 };
 const FEET = new Set([27, 28, 29, 30, 31, 32]);
-const SPEEDS = [1, 2, 4]; // 120 fps footage saved at 60 or 30 fps
 const LOW_FPS = 20;
 const TOO_SLOW_FPS = 12; // below this the detector cannot learn the ground level or time a flight
 
@@ -39,7 +38,8 @@ const state = {
   // live session
   fileMode: false,
   file: null,
-  speed: 1,
+  rec: [], // file mode: every frame's sample, analysed when the video ends
+  rate: null, // file mode: how many times slower than life the clip plays
   facing: 'environment',
   pose: null,
   detector: null,
@@ -129,7 +129,7 @@ function showHome(message = '') {
       </div>
       ${camOk ? '' : '<p class="muted small" style="margin-top:10px">The camera needs a secure page (https). You can still use a recorded video.</p>'}
       <p class="form-error" id="home-error" role="alert" ${message ? '' : 'hidden'}>${esc(message)}</p>
-      <p class="muted small">Slow-motion clips are more accurate. If your phone saves slow motion as a slowed-down file, you can tell the app how much it was slowed.</p>
+      <p class="muted small">A recorded video is more accurate than the live camera, most of all at 120 frames per second. Slow motion is fine: the app works out the frame rate and how much the clip was slowed.</p>
     </section>
     <section class="card">
       <h3>Setting up</h3>
@@ -239,7 +239,6 @@ async function startFile(file) {
   state.opening = true;
   state.fileMode = true;
   state.file = file;
-  state.speed = 1;
   try {
     const info = await state.source.openFile(file);
     state.opening = false;
@@ -279,6 +278,8 @@ function resetRun() {
   state.id = newSessionId();
   state.startedAt = new Date().toISOString();
   state.detector = new JumpDetector();
+  state.rec = [];
+  state.rate = null;
 }
 
 async function enterLive(info) {
@@ -297,8 +298,7 @@ async function enterLive(info) {
   }
   await ensurePose();
   if (state.mode !== 'live') return;
-  if (state.pose && !state.fileMode) beginRun();
-  else if (state.pose) updateFileControls();
+  if (state.pose) beginRun(); // a file starts by itself: there is nothing to choose first
 }
 
 async function ensurePose() {
@@ -337,12 +337,18 @@ function onFrame(v, t) {
   try {
     const { landmarks, sample } = state.pose.detect(v, t);
     state.landmarks = landmarks;
-    // The detector works in real-world time; slow-motion files are scaled back.
-    const rt = state.fileMode ? t / state.speed : t;
-    const { status, jump } = state.detector.push({ ...sample, t: rt });
     drawPose();
-    setStatus(status);
-    if (jump) addJump(jump);
+    if (state.fileMode) {
+      // A file is only recorded here; it is measured as a whole when it ends, which is
+      // what lets the app work out the play rate and cope with a tightly trimmed clip.
+      state.rec.push({ ...sample, t });
+      const pct = v.duration ? Math.min(99, Math.round((100 * t) / v.duration)) : 0;
+      setStatus(`Reading the video… ${pct}%`);
+    } else {
+      const { status, jump } = state.detector.push({ ...sample, t });
+      setStatus(status);
+      if (jump) addJump(jump);
+    }
   } catch (e) {
     state.source.stop();
     state.running = false;
@@ -386,12 +392,8 @@ function buildPanel() {
     <p class="form-error" id="live-error" role="alert" hidden></p>
     <section class="card result-card" id="result-card"></section>
     <p class="notice small" id="fps-warn" hidden>The phone is processing few frames per second, so results will be less precise.</p>
-    <section class="card" id="file-card" ${state.fileMode ? '' : 'hidden'}>
-      <label class="field">Recorded in slow motion
-        <select id="speed">${SPEEDS.map((s) => `<option value="${s}">${s === 1 ? 'No, normal speed' : `${s}× slower`}</option>`).join('')}</select>
-      </label>
-      <p class="muted small">Choose this before the video is processed. Changing it later restarts the video.</p>
-      <div class="actions"><button class="btn" id="file-go" disabled>Start</button></div>
+    <section class="card" id="file-card" hidden>
+      <div class="actions"><button class="btn secondary" id="file-go" disabled>Run again</button></div>
     </section>
     <section class="card">
       <div class="bar"><h3 style="margin:0">This session</h3>${unitToggle()}</div>
@@ -407,7 +409,6 @@ function buildPanel() {
   const flip = $('#flip');
   if (flip) flip.onclick = flipCamera;
   if (state.fileMode) {
-    $('#speed').onchange = (ev) => changeSpeed(Number(ev.target.value));
     $('#file-go').onclick = runFile;
   }
   renderJumps();
@@ -419,7 +420,7 @@ function setStatus(status) {
   state.status = status;
   const el = $('#status');
   if (!el) return;
-  el.className = `status ${status || ''}`;
+  el.className = `status ${STATUS_TEXT[status] ? status : ''}`;
   el.textContent = status ? STATUS_TEXT[status] || status : (state.running ? STATUS_TEXT['no-person'] : 'Getting ready…');
 }
 
@@ -473,7 +474,7 @@ function renderFps() {
   // for the camera it is how many frames the phone manages to process.
   const fileFps = state.fileMode && state.source.fps;
   el.textContent = state.fileMode
-    ? (fileFps ? `Video: ${fileFps} frames per second${state.speed > 1 ? `, recorded at ${fileFps * state.speed}` : ''}` : '')
+    ? (fileFps ? `Video: ${fileFps} frames per second${state.rate > 1 ? `, slowed ${state.rate}× (recorded at ${fileFps * state.rate})` : ''}` : '')
     : (state.fps ? `Processing ${state.fps.toFixed(0)} frames per second` : '');
   // Only the live camera is affected: a file is processed frame by frame at its own pace.
   if (warn) {
@@ -489,8 +490,7 @@ function updateFileControls() {
   const go = $('#file-go');
   if (!go) return;
   go.disabled = !state.pose || state.running;
-  go.textContent = state.finished ? 'Run again' : 'Start';
-  $('#speed').value = String(state.speed);
+  $('#file-card').hidden = !state.finished; // only offered once a run has ended
 }
 
 async function runFile() {
@@ -508,19 +508,12 @@ async function restartFile() {
     return;
   }
   // A re-run replaces the previous run's saved session; it must not leave a
-  // duplicate, or a reading taken at the wrong slow-motion speed, in history.
+  // duplicate in history.
   deleteSession(state.id);
   resetRun();
   renderJumps();
   setStatus(null);
   beginRun();
-}
-
-async function changeSpeed(speed) {
-  state.speed = speed;
-  // Re-run from the start if the video has already been processed.
-  if (state.frames && state.pose) await restartFile();
-  else updateFileControls();
 }
 
 async function flipCamera() {
@@ -550,14 +543,21 @@ async function flipCamera() {
   btn.disabled = false;
 }
 
+// Measures everything recorded from the file so far: finds the play rate and the jumps.
+function analyseFile() {
+  const { rate, jumps } = analyseRecording(state.rec);
+  state.rate = rate;
+  state.rec = [];
+  jumps.forEach(addJump);
+}
+
 function videoFinished() {
   if (state.mode !== 'live' || !state.fileMode || !state.running) return;
   state.running = false;
   state.finished = true;
   state.source.stop();
-  // A jump that landed in the clip's last moments is still waiting to be scored.
-  const last = state.detector.flush();
-  if (last) addJump(last);
+  analyseFile();
+  renderFps();
   const n = state.jumps.length;
   const el = $('#status');
   el.className = 'status';
@@ -566,8 +566,8 @@ function videoFinished() {
   if (!n) {
     $('#result-card').insertAdjacentHTML('beforeend', `<ul class="notes">
       <li>Keep hips, legs and feet in view for the whole jump.</li>
-      <li>Start with a second or two of standing still.</li>
-      <li>If this was a slow-motion clip, set the slow-motion speed and run it again.</li></ul>`);
+      <li>Include about a second of standing still, before or after the jump.</li>
+      <li>Hold the phone still, or prop it up.</li></ul>`);
   }
   updateFileControls();
 }
@@ -612,7 +612,8 @@ function drawPose() {
 // ------------------------------------------------------------------ leaving
 
 function finish() {
-  if (state.running) { const last = state.detector?.flush(); if (last) addJump(last); }
+  if (state.running && state.fileMode) analyseFile(); // Done tapped before the video ended
+  else if (state.running) { const last = state.detector?.flush(); if (last) addJump(last); }
   state.running = false;
   state.source.close();
   state.pose?.close();
