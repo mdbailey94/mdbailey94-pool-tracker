@@ -6,12 +6,21 @@ sessions on your device only. There are no accounts and no uploads.
 
 ## Using it
 
-1. Open the app and tap **Start camera**, or **Use a video** to analyse a recording.
-2. Prop the phone so it stays still. Keep your hips, legs and feet in view for the whole jump, from the front or the side, about 2 to 4 m away. Leave room above your hips for the jump.
-3. Stand still until the screen says **Ready**.
+1. Choose how many athletes (1 to 3), then tap **Start camera**, or **Use a video** to analyse a recording.
+2. Put the phone on the ground, leaning back about 45°, so it looks up at the athletes from 2 to 3 m away.
+   Prop it so it cannot move. With two or three athletes, turn it sideways.
+3. Each athlete stands in their own section of the screen, on the marker. The marker and the label above it
+   say what to fix (step back, come closer, move to the middle) and turn green when the athlete is placed well
+   and standing still.
 4. Jump, and land on the same spot with your legs as straight as they were at takeoff.
-5. The height appears in large type. Switch between cm and inches at any time. Delete a jump if it was misread.
-6. Tap **Done** to save the session. Past sessions can be reviewed and exported as CSV.
+5. Each athlete's height appears in large type over their own section. Switch between cm and inches at any
+   time. Delete a jump if it was misread.
+6. Tap **Done** to save the session. Past sessions can be reviewed and exported as CSV, with a column for the
+   athlete.
+
+On phones with a motion sensor, a gauge shows how far the phone is leaning back and whether it is level.
+About 45° is a starting point: the right angle depends on the lens and the distance, so the stand-here
+prompts have the last word. If they say the feet are cut off, lean the phone forward a little or move it back.
 
 ### Using a video
 
@@ -47,10 +56,30 @@ still before the jump.
 Takeoff and landing usually fall between two frames. The detector estimates where between them, so the timing
 is finer than the frame rate. More frames per second still helps.
 
-This only works if you take off and land in a similar posture. The formula assumes your body is in the same
-position at both moments. If you land with bent knees, your feet touch down later than they would with straight
-legs, the flight time is longer, and the height is overestimated. Tucking your legs in the air has the opposite
-effect. Each jump gets a confidence rating, and the screen explains why when it is not high.
+Flight time gives the height exactly only if you take off and land in the same posture. The formula assumes
+your body is in the same position at both moments. Two common departures are measured and allowed for:
+
+- **Bent-knee landing.** Your feet touch down later than they would with straight legs, so the fall takes
+  longer than the rise and flight time alone reads high. The app measures how much lower your hips are at
+  landing than at takeoff and takes about a third of that off the height.
+- **Knees tucked in the air.** The feet stop following a simple arc and the timing reads about a centimetre
+  low, so a little is added back.
+
+Each jump is shown with a **95% range**: the span the true height is expected to fall in 95 times out of
+100. It is wider with fewer frames in the air, after a posture adjustment, and when you land somewhere other
+than where you took off. When an adjustment was made, the screen also shows what flight time alone gives.
+Each jump still gets a confidence rating, and the screen explains why when it is not high.
+
+**Head rise** is shown as a second, independent measure when the head is in view: how far the head went above
+its standing-tall level. It comes from the arc the head follows in flight (the arc's curvature gives the
+picture's scale, so no body size is assumed) and ignores the feet and the landing altogether. It counts the
+rise onto the toes before takeoff, so it normally reads a little higher than flight time. The two fail in
+different ways, which is what makes comparing them useful: flight time is thrown by landing posture, head rise
+by moving towards or away from the camera, and head rise needs you to stand tall and still before the jump.
+It is also coarser, especially below 60 frames per second. The screen says when the two disagree.
+
+A jump that lands well away from the takeoff spot is not reported at all: the ground sits at a different
+place in the picture and the timing cannot be trusted.
 
 ## Accuracy
 
@@ -59,6 +88,14 @@ them, compare against a known measure, such as a jump mat or a wall reach test, 
 
 What has been checked:
 
+- The posture adjustments and the 95% range were tuned and tested on simulated jumps only (20 to 70 cm,
+  30 to 120 frames per second, knee tucks up to 15 cm, bent landings up to 15 cm). There the true height
+  fell inside the range in 98 to 99 jumps out of 100, and a 10 cm bent landing read 0.4 cm off where flight
+  time alone read 4.4 cm high. How real bodies move may differ, so treat the range as a guide until it has
+  been compared with measured jumps.
+- Head rise, on simulated jumps: within about 1 cm on average at 120 frames per second and 1.5 cm at 60,
+  unaffected by a bent landing; about 2.5 cm high at 30. It reads 2 to 4 cm high if you land 10 cm nearer
+  the camera. On one real side-on clip it read 54.7 cm where flight time read 53.5.
 - Simulated jumps (15 to 80 cm, with landmark jitter, uneven frame timing and dropped frames): the average
   error is about 0.6 cm at 60 frames per second and 0.9 cm at 30, with worst cases of about 2 cm and 4 cm.
   Short jumps at low frame rates are the least precise.
@@ -100,6 +137,7 @@ so later visits, and offline use, do not download them again.
 - `index.html`, `app.css`: page and styles.
 - `src/app.js`: the screens (home, live camera, session detail).
 - `src/capture.js`: camera and video file input, frame by frame.
+- `src/lanes.js` (pure, tested): which athlete a tracked body belongs to, where to stand, and how the phone is tilted.
 - `src/pose.js`: loads the pose model and finds body landmarks.
 - `src/jump.js`: the detector that finds jumps and computes heights. Pure, so it is easy to test.
 - `src/store.js`: sessions and settings in local storage, CSV export.

@@ -117,7 +117,7 @@ body.is-live { padding-bottom: 0; overflow-x: hidden; }
 @media (orientation: landscape) and (min-width: 560px) {
   .live {
     --maxh: calc(100dvh - 16px);
-    grid-template-columns: minmax(0, 1.25fr) minmax(260px, 1fr);
+    grid-template-columns: minmax(0, 1.9fr) minmax(230px, 1fr); /* the picture matters most: athletes read it from afar */
     padding-left: env(safe-area-inset-left); padding-right: env(safe-area-inset-right);
   }
   .stage-col { position: sticky; top: 8px; }
@@ -189,3 +189,60 @@ body.is-live { padding-bottom: 0; overflow-x: hidden; }
 .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; text-align: center; margin: 8px 0; }
 .stats b { display: block; font-size: 22px; font-variant-numeric: tabular-nums; }
 .stats span { color: var(--muted); font-size: 12px; }
+
+/* ---------- lanes: one readout per athlete, laid over their section of the picture */
+.lanes { position: absolute; inset: 0; display: grid; grid-template-columns: repeat(var(--lanes, 1), 1fr); pointer-events: none; }
+/* The result sits under the label, at the top: the bottom of the lane is where the feet are. */
+.lane { display: flex; flex-direction: column; justify-content: flex-start; align-items: center; gap: 6px; min-width: 0; padding: 6px 4px 8px; container-type: inline-size; }
+.lane-chip {
+  display: flex; align-items: center; gap: 6px; max-width: 96%;
+  font-size: clamp(12px, 7cqw, 20px); font-weight: 800; line-height: 1.15; color: #fff;
+  background: rgba(0, 0, 0, .62); border: 2px solid rgba(255, 255, 255, .7); border-radius: 12px; padding: 4px 9px 4px 5px;
+}
+.lane-chip b {
+  flex: none; display: grid; place-items: center; width: 1.6em; height: 1.6em; border-radius: 50%;
+  background: #fff; color: #111; font-size: .9em;
+}
+.lanes.single .lane-chip b { display: none; }
+.lanes.single .lane-chip { padding-left: 9px; }
+.lane-status:empty { display: none; }
+.lane.ready .lane-chip { border-color: #3ddc84; background: rgba(8, 70, 34, .78); }
+.lane.airborne .lane-chip { border-color: #4cc9f0; background: rgba(6, 52, 74, .78); }
+.lane.fix .lane-chip { border-color: #ffb020; background: rgba(84, 52, 0, .82); }
+.lane-result {
+  font-size: clamp(26px, 30cqw, 120px); font-weight: 800; line-height: 1; color: #fff; font-variant-numeric: tabular-nums;
+  text-shadow: 0 2px 10px rgba(0, 0, 0, .9), 0 0 3px rgba(0, 0, 0, .9);
+}
+.lane-result small { font-size: .3em; font-weight: 700; margin-left: .12em; }
+
+/* per-athlete summary tiles */
+.tiles { display: grid; grid-template-columns: repeat(var(--lanes, 3), 1fr); gap: 8px; }
+.tile { display: flex; flex-direction: column; align-items: center; gap: 2px; min-width: 0; container-type: inline-size; }
+.tile-name { font-size: 13px; font-weight: 700; color: var(--text-2); }
+.tile b { font-size: clamp(22px, 30cqw, 56px); font-weight: 800; line-height: 1.05; font-variant-numeric: tabular-nums; }
+.tile b small { font-size: .38em; font-weight: 700; margin-left: .12em; color: var(--text-2); }
+
+/* phone placement */
+.tilt { display: flex; align-items: center; gap: 10px; font-size: 14px; color: var(--text-2); padding: 2px 4px; }
+.tilt-bar { display: none; position: relative; flex: none; width: 96px; height: 10px; border-radius: 999px; background: var(--border); }
+.tilt.live .tilt-bar { display: block; }
+.tilt-zone { position: absolute; top: 0; bottom: 0; left: 33.3%; width: 27.8%; border-radius: 999px; background: color-mix(in srgb, var(--good) 55%, transparent); } /* 30° to 55° of 90° */
+.tilt-mark { position: absolute; top: -4px; width: 4px; height: 18px; margin-left: -2px; border-radius: 2px; background: var(--text); }
+.tilt.ok { color: var(--text); font-weight: 700; }
+.tilt.off { color: var(--text); }
+
+/* home: athletes and the placement picture */
+.field-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 10px 0 2px; font-weight: 700; }
+.setup { display: grid; gap: 8px; }
+@media (min-width: 640px) { .setup { grid-template-columns: 240px 1fr; align-items: start; } }
+.setup-pic { width: 100%; max-width: 280px; height: auto; margin: 0 auto; display: block; }
+.pic-ground { stroke: var(--muted); stroke-width: 2; }
+.pic-phone { fill: var(--accent); }
+.pic-view { stroke: var(--accent); stroke-width: 1.5; stroke-dasharray: 4 4; fill: none; opacity: .7; }
+.pic-arc { stroke: var(--text-2); stroke-width: 1.5; fill: none; }
+.pic-text { font-size: 11px; fill: var(--text-2); font-family: inherit; }
+.pic-body { fill: var(--text); }
+.pic-body-line { stroke: var(--text); stroke-width: 4; stroke-linecap: round; fill: none; }
+.status.fix, .status.empty { border-color: var(--warning); }
+.adjust { margin: 6px 0 0; font-size: 14px; color: var(--text-2); }
+.lane-range { display: block; font-size: .26em; font-weight: 700; letter-spacing: 0; margin-top: .1em; }

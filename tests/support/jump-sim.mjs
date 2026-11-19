@@ -18,6 +18,7 @@ const G = 9.80665;
 const CAM_H = 0.9; // camera height (m); frame covers `distance` metres vertically at the subject
 const HIP = 0.95; // standing hip height (m)
 const SHOULDER = 1.45; // standing shoulder height (m)
+const HEAD = 1.68; // standing ear height (m); the head moves rigidly with the hips here
 const ANKLE = 0.08;
 
 export function rng(seed) {
@@ -95,7 +96,7 @@ function jump(cfg, ctx) {
     return { distance, hip, feet: c.swap ? { L: b, R: a } : { L: a, R: b }, visible: tau < c.vanishAfter };
   };
   const truth = c.vanishAfter < Infinity || f1 !== f0 ? null
-    : { localTakeoff: t0, flightTime: TL, heightM: c.height, flightHeight: (G * TL * TL) / 8 };
+    : { localTakeoff: t0, flightTime: TL, heightM: c.height, flightHeight: (G * TL * TL) / 8, riseM: c.height + c.heelRise };
   return { dur, at, truth, end: { floor: f1, distance: d1 } };
 }
 
@@ -194,6 +195,7 @@ export function simulate(opts = {}) {
     script: [{ type: 'stand', dur: 1.5 }, { type: 'jump' }, { type: 'stand', dur: 1 }], ...opts,
   };
   const rand = rng(o.seed);
+  const randHead = rng(o.seed + 7919); // its own stream, so adding the head left every other landmark as it was
   // Build the timeline.
   let ctx = { floor: 0, distance: o.distance }, t = 0;
   const segs = [], truth = [];
@@ -202,7 +204,8 @@ export function simulate(opts = {}) {
     segs.push({ start: t, ...seg });
     if (seg.truth) {
       const takeoffT = o.t0 + t + seg.truth.localTakeoff;
-      truth.push({ takeoffT, landingT: takeoffT + seg.truth.flightTime, flightTime: seg.truth.flightTime, heightM: seg.truth.heightM, flightHeight: seg.truth.flightHeight });
+      truth.push({ takeoffT, landingT: takeoffT + seg.truth.flightTime, flightTime: seg.truth.flightTime, heightM: seg.truth.heightM, flightHeight: seg.truth.flightHeight,
+        riseM: seg.truth.riseM }); // riseM: head rise from standing tall, which includes the rise onto the toes
     }
     t += seg.dur;
     ctx = seg.end;
@@ -217,7 +220,7 @@ export function simulate(opts = {}) {
   const samples = [];
   const dt = 1 / o.fps;
   // smoothing: options for oneEuro(), or null for raw landmarks.
-  const filt = Object.fromEntries(['heelL', 'toeL', 'heelR', 'toeR', 'hip'].map((k) => [k, o.smoothing ? oneEuro(o.smoothing) : null]));
+  const filt = Object.fromEntries(['heelL', 'toeL', 'heelR', 'toeR', 'hip', 'head'].map((k) => [k, o.smoothing ? oneEuro(o.smoothing) : null]));
   const sm = (k, v, t, scale) => (filt[k] ? filt[k](v, t, scale) : v);
   for (let time = 0; time < total; time += dt * (1 + o.jitter * (2 * rand() - 1))) {
     if (rand() < o.drop) continue;
@@ -225,7 +228,7 @@ export function simulate(opts = {}) {
     const tr = o.t0 + time + o.tNoise * rand.normal();
     if (p.visible === false) {
       Object.values(filt).forEach((f) => f?.reset());
-      samples.push({ t: tr, footL: NaN, footR: NaN, hipY: NaN, bodyLen: NaN, visible: false });
+      samples.push({ t: tr, footL: NaN, footR: NaN, hipY: NaN, bodyLen: NaN, headY: NaN, visible: false });
       continue;
     }
     const scale = p.distance; // metres per frame height
@@ -240,7 +243,8 @@ export function simulate(opts = {}) {
     // lowest point of each foot = max of heel/toe y
     const footL = Math.max(lm('heelL', p.feet.L.heel), lm('toeL', p.feet.L.toe));
     const footR = Math.max(lm('heelR', p.feet.R.heel), lm('toeR', p.feet.R.toe));
-    samples.push({ t: tr, footL, footR, hipY: lm('hip', p.hip, Math.SQRT1_2), bodyLen: bodyLen + n(), visible: true });
+    const headY = o.head === false ? NaN : sm('head', y(p.hip + (HEAD - HIP)) + Math.SQRT1_2 * sd * randHead.normal(), tr, size);
+    samples.push({ t: tr, footL, footR, hipY: lm('hip', p.hip, Math.SQRT1_2), bodyLen: bodyLen + n(), headY, visible: true });
   }
   for (let i = 1; i < samples.length; i++) if (samples[i].t <= samples[i - 1].t) samples[i].t = samples[i - 1].t + 1e-4;
   return { samples, truth, duration: total };

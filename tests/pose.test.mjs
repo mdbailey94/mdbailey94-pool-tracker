@@ -21,7 +21,25 @@ test('legSample needs only the legs', () => {
   assert.equal(s.footR, 0.94);
   assert.equal(s.hipY, 0.5);
   assert.ok(Math.abs(s.bodyLen - 1.6 * 0.4) < 1e-9, `bodyLen ${s.bodyLen}`); // 1.6 × (thigh + shank)
-  assert.deepEqual(legSample(null), { footL: NaN, footR: NaN, hipY: NaN, bodyLen: NaN, visible: false });
+  assert.equal(s.stretch, 1); // legs straight
+  assert.ok(Number.isNaN(s.headY)); // no head in the picture: it is optional
+  assert.deepEqual(legSample(null), { footL: NaN, footR: NaN, hipY: NaN, bodyLen: NaN, headY: NaN, stretch: NaN, visible: false });
+});
+
+test('legSample: head height from the ears, and how straight the leg is', () => {
+  const P = pose(STANDING);
+  P[7] = { x: 0.48, y: 0.12, visibility: 0.9 };
+  P[8] = { x: 0.52, y: 0.14, visibility: 0.2 }; // far ear hidden, as side-on: the pair is still used
+  assert.ok(Math.abs(legSample(P, 1).headY - 0.13) < 1e-9);
+  P[7].visibility = 0.3;
+  assert.ok(Number.isNaN(legSample(P, 1).headY), 'neither ear clear');
+  P[7] = { x: 0.48, y: -0.02, visibility: 0.9 };
+  P[8] = { x: 0.52, y: -0.02, visibility: 0.9 };
+  assert.ok(Number.isNaN(legSample(P, 1).headY), 'head above the picture');
+  // Knee pushed 10% of the frame forward: the leg is the same length but reaches less far.
+  const bent = pose(STANDING.map((q, i) => (i === 2 || i === 3 ? [q[0] + 0.1, q[1], q[2]] : q)));
+  const b = legSample(bent, 1);
+  assert.ok(b.stretch < 0.92 && b.stretch > 0.8, `stretch ${b.stretch}`);
 });
 
 test('legSample keeps a half-hidden far leg and replaces a lost one', () => {

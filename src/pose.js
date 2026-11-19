@@ -23,7 +23,17 @@ const FAR_VIS = 0.15;
 // Shoulder-to-ankle length is about 1.6 x thigh + shank. The detector scales its
 // thresholds by the former; measuring it from the leg means the upper body is not needed.
 const BODY_PER_LEG = 1.6;
-const NONE = { footL: NaN, footR: NaN, hipY: NaN, bodyLen: NaN, visible: false };
+const NONE = { footL: NaN, footR: NaN, hipY: NaN, bodyLen: NaN, headY: NaN, stretch: NaN, visible: false };
+
+// Height of the head in the picture: the midpoint of the ears, a fixed point on the
+// skull that barely moves when the face turns. Optional: NaN when the head is out of
+// the picture or not clearly seen (the legs alone are enough to time a jump).
+function headHeight(P) {
+  const l = P[7], r = P[8];
+  if (!l || !r || Math.max(l.visibility, r.visibility) < MIN_VIS) return NaN;
+  const y = (l.y + r.y) / 2;
+  return y > 0.01 && y < 0.99 ? y : NaN;
+}
 
 // Landmarks (33 x {x, y, visibility}, normalised to the frame) -> the detector's
 // sample. y is normalised to frame height, increasing downward; aspect = width / height.
@@ -38,6 +48,7 @@ export function legSample(P, aspect = 1) {
       inFrame: [heel, toe].every((q) => q.x >= 0 && q.x <= 1 && q.y >= 0 && q.y <= 1),
       foot: Math.max(heel.y, toe.y), // lowest point of the foot
       len: dist(hip, knee) + dist(knee, ankle), // unchanged by bending the knee
+      reach: dist(hip, ankle), // shorter than len when the knee is bent
     };
   };
   const l = leg('L'), r = leg('R');
@@ -47,12 +58,15 @@ export function legSample(P, aspect = 1) {
     footL: l === best || otherOk ? l.foot : best.foot,
     footR: r === best || otherOk ? r.foot : best.foot,
     hipY: (P[23].y + P[24].y) / 2,
+    headY: headHeight(P),
+    stretch: best.len > 0 ? best.reach / best.len : NaN, // 1 = leg straight; lower = knee bent
     bodyLen: BODY_PER_LEG * best.len,
     visible: best.vis >= MIN_VIS && best.inFrame && Math.max(P[23].visibility, P[24].visibility) >= MIN_VIS,
   };
 }
 
-export async function createPoseTracker() {
+// numPoses: how many bodies to look for (one per athlete).
+export async function createPoseTracker({ numPoses = 1 } = {}) {
   // Dynamic import keeps the heavy bundle off the app's startup path.
   const { PoseLandmarker } = await import(`${BASE}vision_bundle.mjs`);
   // Built by hand: FilesetResolver may pick the no-SIMD build, which we don't ship.
@@ -60,7 +74,7 @@ export async function createPoseTracker() {
   const make = (delegate) => PoseLandmarker.createFromOptions(fileset, {
     baseOptions: { modelAssetPath: `${BASE}pose_landmarker_lite.task`, delegate },
     runningMode: 'VIDEO',
-    numPoses: 1,
+    numPoses,
   });
   let landmarker, delegate = 'GPU';
   try {
@@ -83,11 +97,8 @@ export async function createPoseTracker() {
     if (ms < lastMs - 100) { offset += lastMs + 1000 - ms; ms = lastMs + 1000; }
     ms = Math.max(ms, lastMs + 1);
     lastMs = ms;
-    const lm = landmarker.detectForVideo(video, ms).landmarks?.[0];
-    if (!lm) return { landmarks: null, sample: { ...NONE } };
-    const landmarks = lm.map((p) => ({ x: p.x, y: p.y, visibility: p.visibility ?? 0 }));
-    const sample = legSample(landmarks, video.videoWidth / video.videoHeight || 1);
-    return { landmarks, sample };
+    const found = landmarker.detectForVideo(video, ms).landmarks || [];
+    return { poses: found.map((lm) => lm.map((p) => ({ x: p.x, y: p.y, visibility: p.visibility ?? 0 }))) };
   }
 
   return { detect, close: () => landmarker.close(), delegate };
