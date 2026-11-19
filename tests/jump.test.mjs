@@ -404,3 +404,39 @@ test('recording: landing nearer or farther from the camera is read right or not 
     if (Math.abs(forward) <= 0.15 && forward > 0) assert.ok(found > 0, `forward ${forward}: nothing found`);
   }
 });
+
+// ---- head rise: a second measure that ignores the feet and the landing
+
+test('head rise: close to the true rise at high frame rates, and blind to a bent landing', (t) => {
+  for (const [fps, tol] of [[120, 1.5], [60, 2.2]]) for (const [name, jump] of [['clean', {}], ['bent landing', { landBend: 0.1 }]]) {
+    const errs = [];
+    for (const h of [0.25, 0.4, 0.55]) for (let seed = 1; seed <= 8; seed++) {
+      const { samples, truth } = simulate({ seed: seed * 71 + fps, fps, noise: 0.008, smoothing: {}, script: [stand(1.2), { type: 'jump', height: h, ...jump }, stand(1)] });
+      const j = run(new JumpDetector(), samples).jumps[0];
+      assert.ok(j && Number.isFinite(j.headRiseM), `${fps} fps ${name} ${h} m seed ${seed}: no head rise`);
+      assert.ok(j.headRiseSdM > 0);
+      // The head counts the rise onto the toes, so it is compared with that, not with flight height.
+      errs.push((j.headRiseM - truth[0].riseM) * 100);
+    }
+    const mean = errs.reduce((a, b) => a + Math.abs(b), 0) / errs.length;
+    t.diagnostic(`${fps} fps ${name}: head rise off by ${mean.toFixed(2)} cm on average, worst ${Math.max(...errs.map(Math.abs)).toFixed(1)} cm`);
+    assert.ok(mean < tol, `${fps} fps ${name}: mean error ${mean.toFixed(2)} cm`);
+  }
+});
+
+test('head rise: not reported without a head in view or a standing-tall reference', () => {
+  const script = [stand(1.2), { type: 'jump', height: 0.4 }, stand(1)];
+  // Head out of the picture: the jump is still measured from the legs.
+  const blind = run(new JumpDetector(), simulate({ seed: 3, fps: 60, noise: 0.008, smoothing: {}, head: false, script }).samples).jumps[0];
+  assert.ok(blind && blind.heightM > 0.3 && Number.isNaN(blind.headRiseM));
+  // Reference taken with bent knees: the detector is told the legs are not straight.
+  const crouched = simulate({ seed: 3, fps: 60, noise: 0.008, smoothing: {}, script }).samples.map((s) => ({ ...s, stretch: 0.85 }));
+  assert.ok(Number.isNaN(run(new JumpDetector(), crouched).jumps[0].headRiseM));
+  // Clip that starts mid-crouch: only the reverse pass sees the jump, and seen backwards
+  // the "standing" before it is the recovery after landing, so no head rise is given.
+  const { samples, truth } = simulate({ seed: 3, fps: 60, noise: 0.008, smoothing: {}, script });
+  const late = analyseRecording(samples.filter((s) => s.t >= truth[0].takeoffT - 0.2)).jumps[0];
+  assert.ok(late && Math.abs(late.heightM - 0.4) < 0.04 && Number.isNaN(late.headRiseM));
+  // The whole clip: forward pass has the reference, so the figure survives the merge.
+  assert.ok(Number.isFinite(analyseRecording(samples).jumps[0].headRiseM));
+});

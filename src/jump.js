@@ -14,6 +14,8 @@ const DEFAULTS = {
   settleWindow: 0.5, // s of standing still used to learn the ground level
   minSettleSamples: 5,
   stillHips: true, // hips must be still too while learning the ground (live); off for recordings
+  straightLeg: 0.96, // hip-to-ankle reach over leg length that counts as standing tall (head reference)
+  tallLeg: 0.9, // and leg length then, as a share of leg length in flight
   stillTol: 0.025, // max robust spread / drift of feet and hips while "still" (× bodyLen)
   driftTol: 0.035, // feet this far from the baseline for driftWindow → person moved, re-settle
   driftWindow: 0.3,
@@ -152,7 +154,11 @@ export class JumpDetector {
     }
     if (gap > o.noPersonAfter) { this.base = null; this.buf = []; this.phase = 'settling'; }
     this.lastSeen = t;
-    const p = { t, l: s.footL, r: s.footR, h: s.hipY, L: s.bodyLen };
+    const p = {
+      t, l: s.footL, r: s.footR, h: s.hipY, L: s.bodyLen,
+      e: Number.isFinite(s.headY) ? s.headY : NaN, // head height, optional
+      k: Number.isFinite(s.stretch) ? s.stretch : 1, // leg straightness, 1 when not given
+    };
     this.buf.push(p);
     while (this.buf.length && this.buf[0].t < t - (o.maxFlight + o.settleWindow + 1)) this.buf.shift();
 
@@ -226,7 +232,21 @@ export class JumpDetector {
     }
     if (robustSd(w.map((q) => q.L)) > 0.05 * L) return;
     const margin = Math.min(o.maxMargin, Math.max(o.minMargin, o.marginNoise * noise));
-    this.base = { l: median(w.map((q) => q.l)), r: median(w.map((q) => q.r)), h: median(w.map((q) => q.h)), L, noise, margin };
+    // Head level when standing tall, for the head-rise measure: the highest level the
+    // head has held still at since the athlete took up this spot. A crouch held before
+    // the jump is lower, so it never replaces it; a head still moving is not counted,
+    // nor is one held still over bent knees.
+    let e = this.base ? this.base.e : NaN, eL = this.base ? this.base.eL : NaN; // level, and leg length seen then
+    const ev = w.map((q) => q.e).filter(Number.isFinite);
+    if (ev.length >= 0.8 * w.length) {
+      const h2 = ev.length >> 1;
+      if (robustSd(ev) < o.stillTol * L && Math.abs(median(ev.slice(0, h2)) - median(ev.slice(h2))) < 0.5 * o.stillTol * L &&
+          median(w.map((q) => q.k)) >= o.straightLeg) {
+        const m = median(ev);
+        if (!Number.isFinite(e) || m < e) { e = m; eL = L; } // y grows downward: smaller is higher
+      }
+    }
+    this.base = { l: median(w.map((q) => q.l)), r: median(w.map((q) => q.r)), h: median(w.map((q) => q.h)), L, noise, margin, e, eL };
     this.phase = 'ready';
   }
 
@@ -407,12 +427,40 @@ export class JumpDetector {
     if (f.gaps) flag(1, 'Tracking dropped out briefly during the jump');
     if (shift > o.levelNote) flag(1, 'You landed away from your takeoff spot; try to land where you took off');
 
+    // Second, independent measure: how far the head rose above its standing-tall level.
+    // In flight the head follows a gravity arc; the arc's curvature gives the picture's
+    // scale at the head (so no body size is assumed), and its top gives the peak. This
+    // ignores the feet and the landing altogether. It counts the rise onto the toes
+    // before takeoff, so it normally reads a little higher than flight time. It needs a
+    // standing-tall reference, and it is thrown off if the athlete moves towards or away
+    // from the camera, which flight time is not.
+    let headRiseM = NaN, headRiseSdM = NaN;
+    // Standing tall means legs as long in the picture as they are in flight. Seen from
+    // the front a crouch hides its bent knees, but the legs look shorter.
+    const tall = Number.isFinite(b.e) && b.eL >= o.tallLeg * median(air.map((q) => q.L));
+    if (hipFit && tall) {
+      const pts = S.filter((q) => q.t >= takeoffT + 0.1 * T && q.t <= landingT - 0.1 * T && Number.isFinite(q.e));
+      if (pts.length >= 6) {
+        const k = polyfit(pts.map((q) => q.t - tm), pts.map((q) => q.e), 2);
+        if (k[2] > 0.6 * c && k[2] < 1.6 * c) { // the head must fall like the hips do
+          const top = k[0] - (k[1] * k[1]) / (4 * k[2]);
+          const rise = ((b.e - top) * G) / (2 * k[2]);
+          if (rise > 0 && rise < 1.6) {
+            headRiseM = rise;
+            // Spread seen in simulated jumps: about 1 cm with 65 frames in the air, 2 cm
+            // with 33, 3 cm with 16. Coarser than flight time, most of all at low frame rates.
+            headRiseSdM = 0.004 + 0.46 / air.length;
+          }
+        }
+      }
+    }
+
     // Same spot → keep the baseline and stay ready for the next jump; else re-learn the ground.
     if (shift > o.levelNote) { this.base = null; this.phase = 'settling'; } else this.phase = 'ready';
     return {
       takeoffT, landingT, flightTime: T,
       confidence: ['low', 'medium', 'high'][conf], notes, bodyM, apexT: hipFit ? tApex : NaN,
-      dropM, foldM, freeFall, rigid: Boolean(rigid), frames: air.length, moved: shift > o.levelNote,
+      dropM, foldM, freeFall, rigid: Boolean(rigid), frames: air.length, moved: shift > o.levelNote, headRiseM, headRiseSdM,
       ...estimateHeight({ flightTime: T, frames: air.length, dropM, foldM, moved: shift > o.levelNote }),
     };
   }
@@ -490,13 +538,19 @@ export function analyseRecording(samples, { rates = PLAY_RATES, options } = {}) 
     const jumps = [...fwd.jumps];
     for (const r of rev) {
       const i = jumps.findIndex((f) => f.takeoffT < r.landingT && r.takeoffT < f.landingT);
-      if (i >= 0) { if (RANK[r.confidence] > RANK[jumps[i].confidence]) jumps[i] = r; continue; }
+      // Head rise needs a standing-tall reference from before the jump; seen backwards the
+      // "before" is the recovery after landing, so only the forward pass's figure is kept.
+      const noHead = { headRiseM: NaN, headRiseSdM: NaN };
+      if (i >= 0) {
+        if (RANK[r.confidence] > RANK[jumps[i].confidence]) jumps[i] = { ...r, headRiseM: jumps[i].headRiseM, headRiseSdM: jumps[i].headRiseSdM };
+        continue;
+      }
       // Seen only backwards. That is what the reverse pass is for when the clip starts
       // mid-jump, before the forward pass has a ground level. Later than that, the forward
       // pass looked at the same moment and saw no jump, and it is the one to believe: if
       // the athlete landed nearer the camera, then seen backwards they stand "above" the
       // new ground level at their old spot, which looks like hovering.
-      if (r.takeoffT < fwd.readyAt) jumps.push(r);
+      if (r.takeoffT < fwd.readyAt) jumps.push({ ...r, ...noHead });
     }
     if (!jumps.length) continue;
     jumps.sort((a, b) => a.takeoffT - b.takeoffT);

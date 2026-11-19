@@ -70,6 +70,14 @@ Each jump is shown with a **95% range**: the span the true height is expected to
 than where you took off. When an adjustment was made, the screen also shows what flight time alone gives.
 Each jump still gets a confidence rating, and the screen explains why when it is not high.
 
+**Head rise** is shown as a second, independent measure when the head is in view: how far the head went above
+its standing-tall level. It comes from the arc the head follows in flight (the arc's curvature gives the
+picture's scale, so no body size is assumed) and ignores the feet and the landing altogether. It counts the
+rise onto the toes before takeoff, so it normally reads a little higher than flight time. The two fail in
+different ways, which is what makes comparing them useful: flight time is thrown by landing posture, head rise
+by moving towards or away from the camera, and head rise needs you to stand tall and still before the jump.
+It is also coarser, especially below 60 frames per second. The screen says when the two disagree.
+
 A jump that lands well away from the takeoff spot is not reported at all: the ground sits at a different
 place in the picture and the timing cannot be trusted.
 
@@ -85,6 +93,9 @@ What has been checked:
   fell inside the range in 98 to 99 jumps out of 100, and a 10 cm bent landing read 0.4 cm off where flight
   time alone read 4.4 cm high. How real bodies move may differ, so treat the range as a guide until it has
   been compared with measured jumps.
+- Head rise, on simulated jumps: within about 1 cm on average at 120 frames per second and 1.5 cm at 60,
+  unaffected by a bent landing; about 2.5 cm high at 30. It reads 2 to 4 cm high if you land 10 cm nearer
+  the camera. On one real side-on clip it read 54.7 cm where flight time read 53.5.
 - Simulated jumps (15 to 80 cm, with landmark jitter, uneven frame timing and dropped frames): the average
   error is about 0.6 cm at 60 frames per second and 0.9 cm at 30, with worst cases of about 2 cm and 4 cm.
   Short jumps at low frame rates are the least precise.

@@ -67,6 +67,18 @@ const best = (jumps) => jumps.reduce((b, j) => (!b || j.heightM > b.heightM ? j 
 const ofAthlete = (jumps, i) => jumps.filter((j) => (j.athlete || 0) === i);
 // "49.8–55.0": the range the true height is 95% likely to be in (older records have none).
 const rangeText = (j) => (Number.isFinite(j.lowM) && Number.isFinite(j.highM) ? `${heightText(j.lowM)}–${heightText(j.highM)}` : '');
+// The second measure, and whether it sits where it should against the first. The head
+// counts the rise onto the toes, so a little more than flight time is normal.
+function headText(j) {
+  if (!Number.isFinite(j.headRiseM)) return '';
+  const pm = Number.isFinite(j.headRiseSdM) ? ` ± ${heightText(1.96 * j.headRiseSdM)}` : '';
+  const slack = 1.96 * (j.headRiseSdM || 0.02) + (Number.isFinite(j.highM) ? j.highM - j.heightM : 0.03);
+  const diff = j.headRiseM - j.heightM;
+  let verdict = 'The two measures agree.';
+  if (diff < -slack) verdict = 'Less than the flight time implies: the landing may have been lower than it looked, or you moved away from the camera.';
+  else if (diff > 0.15 + slack) verdict = 'Much more than the flight time implies: you may have moved towards the camera.';
+  return `Head rose ${heightText(j.headRiseM)}${pm} ${unitText()} above standing. ${verdict}`;
+}
 // What was allowed for, beyond flight time alone.
 function adjustText(j) {
   const parts = [];
@@ -235,7 +247,7 @@ function showDetail(id) {
   }).join('')}</div>` : ''}
       <ul class="jumps">${rec.jumps.map((j, i) => `<li class="${j === b ? 'best' : ''}">
         <div><b>${heightText(j.heightM)} ${unitText()}</b>${j === b ? '<span class="badge">Best</span>' : ''}<br>
-        <span class="muted small">${many > 1 ? `Athlete ${(j.athlete || 0) + 1} · ` : ''}#${i + 1} · ${rangeText(j) ? `95% range ${rangeText(j)} · ` : ''}${Math.round(j.flightTime * 1000)} ms · ${esc(j.confidence)} confidence</span></div></li>`).join('')}</ul>
+        <span class="muted small">${many > 1 ? `Athlete ${(j.athlete || 0) + 1} · ` : ''}#${i + 1} · ${rangeText(j) ? `95% range ${rangeText(j)} · ` : ''}${Number.isFinite(j.headRiseM) ? `head rose ${heightText(j.headRiseM)} · ` : ''}${Math.round(j.flightTime * 1000)} ms · ${esc(j.confidence)} confidence</span></div></li>`).join('')}</ul>
       <div class="actions">
         <button class="btn" id="d-csv">Export CSV</button>
         <button class="btn secondary" id="d-back">Back</button>
@@ -413,6 +425,7 @@ function addJump(j, athlete = 0) {
   state.jumps.push({
     at: Date.now(), athlete, heightM: j.heightM, flightTime: j.flightTime, confidence: j.confidence, notes: j.notes || [],
     lowM: j.lowM, highM: j.highM, flightHeightM: j.flightHeightM, bentLandingM: j.bentLandingM, tuckM: j.tuckM,
+    headRiseM: j.headRiseM, headRiseSdM: j.headRiseSdM,
   });
   state.latest = state.jumps[state.jumps.length - 1];
   persist();
@@ -425,8 +438,8 @@ function persist() {
     id: state.id,
     startedAt: state.startedAt,
     athletes: state.lanes.length,
-    jumps: state.jumps.map(({ at, athlete, heightM, flightTime, confidence, lowM, highM, flightHeightM }) => ({
-      at, athlete, heightM, flightTime, confidence, lowM, highM, flightHeightM,
+    jumps: state.jumps.map(({ at, athlete, heightM, flightTime, confidence, lowM, highM, flightHeightM, headRiseM }) => ({
+      at, athlete, heightM, flightTime, confidence, lowM, highM, flightHeightM, headRiseM,
     })),
   });
 }
@@ -561,6 +574,7 @@ function renderJumps() {
     <div class="result" aria-label="Latest jump">${heightText(l.heightM)}<small>${unitText()}</small></div>
     <div class="result-meta">${rangeText(l) ? `<b>95% range ${rangeText(l)} ${unitText()}</b><br>` : ''}${meta(l)}</div>
     ${adjustText(l) ? `<p class="adjust">${esc(adjustText(l))}</p>` : ''}
+    ${headText(l) ? `<p class="adjust">${esc(headText(l))}</p>` : ''}
     ${conf !== 'high' && l.notes.length ? `<ul class="notes">${l.notes.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>` : ''}`
       : `<div class="result" aria-label="No jump yet">–<small>${unitText()}</small></div>
     <div class="result-meta">${state.jumps.length ? 'Latest jump deleted' : 'No jump yet'}</div>`;
@@ -574,6 +588,7 @@ function renderJumps() {
         <span class="muted small">${last && rangeText(last) ? `${rangeText(last)} · ` : ''}${bests[i] ? `best ${heightText(bests[i].heightM)}` : 'no jump yet'}</span></div>`;
     }).join('')}</div>
     ${l && adjustText(l) ? `<p class="adjust"><b>Athlete ${l.athlete + 1}:</b> ${esc(adjustText(l))}</p>` : ''}
+    ${l && headText(l) ? `<p class="adjust"><b>Athlete ${l.athlete + 1}:</b> ${esc(headText(l))}</p>` : ''}
     ${l && conf !== 'high' && l.notes.length ? `<ul class="notes"><li><b>Athlete ${l.athlete + 1}:</b> ${esc(l.notes[0])}</li></ul>` : ''}`;
   }
   // The same numbers over the picture, where each athlete can read their own.
