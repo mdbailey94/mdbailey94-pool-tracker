@@ -3,7 +3,7 @@
 // seconds. Jump height comes from flight time, so frame timing is the product.
 
 // Video files are assumed to hold at most 120 frames per second.
-const FILE_RATE = 0.5;
+const FILE_RATE = 0.4; // a little under half speed, so 120 fps never outruns a 60 Hz screen
 
 export function cameraSupported() {
   return Boolean(navigator.mediaDevices?.getUserMedia) && window.isSecureContext;
