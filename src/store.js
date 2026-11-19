@@ -1,8 +1,10 @@
 // Finished jump sessions and the chosen unit, on this device only.
-// Session record: { id, startedAt, jumps: [{ at, heightM, flightTime, confidence }] }
+// Session record: { id, startedAt, athletes, jumps: [{ at, athlete, heightM, flightTime, confidence }] }
+// athlete is 0-based; records saved before athletes were added have neither field.
 
 const SESSIONS_KEY = 'jump-height-sessions';
 const UNIT_KEY = 'jump-height-unit';
+const ATHLETES_KEY = 'jump-height-athletes';
 const MAX_SESSIONS = 100;
 
 function read(key, fallback) {
@@ -28,6 +30,9 @@ export const newSessionId = () => `s${Date.now().toString(36)}${Math.random().to
 export const loadUnit = () => (read(UNIT_KEY, 'cm') === 'in' ? 'in' : 'cm');
 export const saveUnit = (unit) => write(UNIT_KEY, unit);
 
+export const loadAthletes = () => { const n = Number(read(ATHLETES_KEY, 1)); return n >= 1 && n <= 3 ? Math.round(n) : 1; };
+export const saveAthletes = (n) => write(ATHLETES_KEY, n);
+
 // Stored data is not trusted: the storage is shared by every page on this
 // origin, so anything that isn't a well-formed session is dropped.
 const validJump = (j) => j && Number.isFinite(j.heightM) && Number.isFinite(j.flightTime);
@@ -36,7 +41,7 @@ export const loadSessions = () => {
   if (!Array.isArray(all)) return [];
   return all
     .filter((s) => s && typeof s.id === 'string' && typeof s.startedAt === 'string' && Array.isArray(s.jumps))
-    .map((s) => ({ ...s, jumps: s.jumps.filter(validJump) }))
+    .map((s) => ({ ...s, jumps: s.jumps.filter(validJump).map((j) => ({ ...j, athlete: j.athlete >= 0 && j.athlete < 3 ? Math.trunc(j.athlete) : 0 })) }))
     .filter((s) => s.jumps.length);
 };
 
@@ -55,9 +60,9 @@ export function deleteSession(id) {
 const cell = (v) => (/[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : String(v));
 
 export function sessionCSV(rec) {
-  const rows = [['session_started', 'jump', 'time', 'height_cm', 'height_in', 'flight_time_ms', 'confidence']];
+  const rows = [['session_started', 'jump', 'athlete', 'time', 'height_cm', 'height_in', 'flight_time_ms', 'confidence']];
   rec.jumps.forEach((j, i) => rows.push([
-    rec.startedAt, i + 1, new Date(j.at).toISOString(),
+    rec.startedAt, i + 1, (j.athlete || 0) + 1, new Date(j.at).toISOString(),
     (j.heightM * 100).toFixed(1), (j.heightM * 39.3701).toFixed(1),
     Math.round(j.flightTime * 1000), j.confidence,
   ]));

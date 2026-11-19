@@ -6,12 +6,21 @@ sessions on your device only. There are no accounts and no uploads.
 
 ## Using it
 
-1. Open the app and tap **Start camera**, or **Use a video** to analyse a recording.
-2. Prop the phone so it stays still. Keep your hips, legs and feet in view for the whole jump, from the front or the side, about 2 to 4 m away. Leave room above your hips for the jump.
-3. Stand still until the screen says **Ready**.
+1. Choose how many athletes (1 to 3), then tap **Start camera**, or **Use a video** to analyse a recording.
+2. Put the phone on the ground, leaning back about 45°, so it looks up at the athletes from 2 to 3 m away.
+   Prop it so it cannot move. With two or three athletes, turn it sideways.
+3. Each athlete stands in their own section of the screen, on the marker. The marker and the label above it
+   say what to fix (step back, come closer, move to the middle) and turn green when the athlete is placed well
+   and standing still.
 4. Jump, and land on the same spot with your legs as straight as they were at takeoff.
-5. The height appears in large type. Switch between cm and inches at any time. Delete a jump if it was misread.
-6. Tap **Done** to save the session. Past sessions can be reviewed and exported as CSV.
+5. Each athlete's height appears in large type over their own section. Switch between cm and inches at any
+   time. Delete a jump if it was misread.
+6. Tap **Done** to save the session. Past sessions can be reviewed and exported as CSV, with a column for the
+   athlete.
+
+On phones with a motion sensor, a gauge shows how far the phone is leaning back and whether it is level.
+About 45° is a starting point: the right angle depends on the lens and the distance, so the stand-here
+prompts have the last word. If they say the feet are cut off, lean the phone forward a little or move it back.
 
 ### Using a video
 
@@ -100,6 +109,7 @@ so later visits, and offline use, do not download them again.
 - `index.html`, `app.css`: page and styles.
 - `src/app.js`: the screens (home, live camera, session detail).
 - `src/capture.js`: camera and video file input, frame by frame.
+- `src/lanes.js` (pure, tested): which athlete a tracked body belongs to, where to stand, and how the phone is tilted.
 - `src/pose.js`: loads the pose model and finds body landmarks.
 - `src/jump.js`: the detector that finds jumps and computes heights. Pure, so it is easy to test.
 - `src/store.js`: sessions and settings in local storage, CSV export.

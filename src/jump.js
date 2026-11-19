@@ -435,5 +435,20 @@ export function analyseRecording(samples, { rates = PLAY_RATES, options } = {}) 
     const score = off.reduce((a, b) => a + b, 0) / off.length;
     if (!best || score < best.score) best = { rate, jumps, score };
   }
-  return best ? { rate: best.rate, jumps: best.jumps } : { rate: null, jumps: [] };
+  // score: how far from person-sized the implied body is at this rate (lower is surer).
+  return best ? { rate: best.rate, jumps: best.jumps, score: best.score } : { rate: null, jumps: [], score: Infinity };
+}
+
+// Several athletes filmed in one clip share its play rate. Each lane is analysed on
+// its own first; the lane whose rate is surest sets it for everyone.
+// lanes: one sample list per athlete. Returns { rate, lanes: [jumps per athlete] }.
+export function analyseLanes(lanes, opts = {}) {
+  const first = lanes.map((samples) => analyseRecording(samples, opts));
+  const surest = first.reduce((a, b) => (b.score < a.score ? b : a), { rate: null, score: Infinity });
+  if (surest.rate == null) return { rate: null, lanes: lanes.map(() => []) };
+  return {
+    rate: surest.rate,
+    lanes: lanes.map((samples, i) => (first[i].rate === surest.rate ? first[i].jumps
+      : analyseRecording(samples, { ...opts, rates: [surest.rate] }).jumps)),
+  };
 }

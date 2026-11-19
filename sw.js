@@ -9,7 +9,7 @@ const CACHE = `${PREFIX}v1`;
 const VENDOR_CACHE = `${PREFIX}mediapipe-0.10.14`;
 const ASSETS = [
   './', 'index.html', 'app.css', 'manifest.webmanifest', 'icon.svg', 'icon-180.png',
-  'src/app.js', 'src/capture.js', 'src/pose.js', 'src/jump.js', 'src/store.js',
+  'src/app.js', 'src/capture.js', 'src/pose.js', 'src/jump.js', 'src/lanes.js', 'src/store.js',
 ];
 const VENDOR = 'vendor/mediapipe/';
 const VENDOR_FILES = [

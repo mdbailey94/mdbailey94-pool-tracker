@@ -52,7 +52,8 @@ export function legSample(P, aspect = 1) {
   };
 }
 
-export async function createPoseTracker() {
+// numPoses: how many bodies to look for (one per athlete).
+export async function createPoseTracker({ numPoses = 1 } = {}) {
   // Dynamic import keeps the heavy bundle off the app's startup path.
   const { PoseLandmarker } = await import(`${BASE}vision_bundle.mjs`);
   // Built by hand: FilesetResolver may pick the no-SIMD build, which we don't ship.
@@ -60,7 +61,7 @@ export async function createPoseTracker() {
   const make = (delegate) => PoseLandmarker.createFromOptions(fileset, {
     baseOptions: { modelAssetPath: `${BASE}pose_landmarker_lite.task`, delegate },
     runningMode: 'VIDEO',
-    numPoses: 1,
+    numPoses,
   });
   let landmarker, delegate = 'GPU';
   try {
@@ -83,11 +84,8 @@ export async function createPoseTracker() {
     if (ms < lastMs - 100) { offset += lastMs + 1000 - ms; ms = lastMs + 1000; }
     ms = Math.max(ms, lastMs + 1);
     lastMs = ms;
-    const lm = landmarker.detectForVideo(video, ms).landmarks?.[0];
-    if (!lm) return { landmarks: null, sample: { ...NONE } };
-    const landmarks = lm.map((p) => ({ x: p.x, y: p.y, visibility: p.visibility ?? 0 }));
-    const sample = legSample(landmarks, video.videoWidth / video.videoHeight || 1);
-    return { landmarks, sample };
+    const found = landmarker.detectForVideo(video, ms).landmarks || [];
+    return { poses: found.map((lm) => lm.map((p) => ({ x: p.x, y: p.y, visibility: p.visibility ?? 0 }))) };
   }
 
   return { detect, close: () => landmarker.close(), delegate };
