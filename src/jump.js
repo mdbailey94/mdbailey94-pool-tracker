@@ -88,7 +88,9 @@ const polyfit = (xs, ys, deg) => lstsq(xs.map((x) => [1, x, x * x].slice(0, deg 
 // measured jumps by real athletes.
 const EST = {
   dropFrom: 0.015, dropGain: 0.33, dropSpread: 0.3, // bent landing: threshold (m), share removed, its sd as a share
-  foldFrom: 0.025, foldGain: 0.012, foldSpread: 0.007, // tuck: threshold (m), amount added (m), its sd (m)
+  // tuck: fold (m) where the adjustment starts and where it is complete, the full amount
+  // added (m), and its sd as a share. Ramped, so near-identical jumps read alike.
+  foldFrom: 0.015, foldFull: 0.04, foldGain: 0.012, foldSpread: 0.6,
   timeBase: 0.004, timePerFrame: 0.25, // flight-time sd (s): base + share of one frame interval
   blind: 0.02, // extra sd (m) when too few frames were seen to check posture at all
   moved: 0.015, // extra sd (m) when the landing spot was not the takeoff spot
@@ -98,9 +100,10 @@ export function estimateHeight({ flightTime: T, frames, dropM, foldM, moved = fa
   const flightHeightM = heightFromFlightTime(T);
   const seen = Number.isFinite(dropM);
   const bentLandingM = seen && dropM > EST.dropFrom ? -EST.dropGain * (dropM - EST.dropFrom) : 0;
-  const tuckM = Number.isFinite(foldM) && foldM > EST.foldFrom ? EST.foldGain : 0;
+  const ramp = Number.isFinite(foldM) ? Math.min(1, Math.max(0, (foldM - EST.foldFrom) / (EST.foldFull - EST.foldFrom))) : 0;
+  const tuckM = EST.foldGain * ramp;
   const sdTime = ((G * T) / 4) * (EST.timeBase + EST.timePerFrame * (T / Math.max(1, frames)));
-  const sd = Math.hypot(sdTime, EST.dropSpread * bentLandingM, tuckM ? EST.foldSpread : 0, seen ? 0 : EST.blind, moved ? EST.moved : 0);
+  const sd = Math.hypot(sdTime, EST.dropSpread * bentLandingM, EST.foldSpread * tuckM, seen ? 0 : EST.blind, moved ? EST.moved : 0);
   const heightM = Math.max(0, flightHeightM + bentLandingM + tuckM);
   return {
     heightM, flightHeightM, bentLandingM, tuckM,
