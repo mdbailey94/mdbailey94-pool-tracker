@@ -192,7 +192,8 @@ body.is-live { padding-bottom: 0; overflow-x: hidden; }
 
 /* ---------- lanes: one readout per athlete, laid over their section of the picture */
 .lanes { position: absolute; inset: 0; display: grid; grid-template-columns: repeat(var(--lanes, 1), 1fr); pointer-events: none; }
-.lane { display: flex; flex-direction: column; justify-content: space-between; align-items: center; min-width: 0; padding: 6px 4px 8px; container-type: inline-size; }
+/* The result sits under the label, at the top: the bottom of the lane is where the feet are. */
+.lane { display: flex; flex-direction: column; justify-content: flex-start; align-items: center; gap: 6px; min-width: 0; padding: 6px 4px 8px; container-type: inline-size; }
 .lane-chip {
   display: flex; align-items: center; gap: 6px; max-width: 96%;
   font-size: clamp(12px, 7cqw, 20px); font-weight: 800; line-height: 1.15; color: #fff;
