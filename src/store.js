@@ -1,5 +1,7 @@
 // Finished jump sessions and the chosen unit, on this device only.
-// Session record: { id, startedAt, athletes, jumps: [{ at, athlete, heightM, flightTime, confidence }] }
+// Session record: { id, startedAt, athletes, jumps: [{ at, athlete, heightM, flightTime, confidence,
+//   lowM, highM, flightHeightM }] }. heightM is the reported height; lowM–highM its 95% range;
+// flightHeightM what flight time alone gives.
 // athlete is 0-based; records saved before athletes were added have neither field.
 
 const SESSIONS_KEY = 'jump-height-sessions';
@@ -60,10 +62,12 @@ export function deleteSession(id) {
 const cell = (v) => (/[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : String(v));
 
 export function sessionCSV(rec) {
-  const rows = [['session_started', 'jump', 'athlete', 'time', 'height_cm', 'height_in', 'flight_time_ms', 'confidence']];
+  const rows = [['session_started', 'jump', 'athlete', 'time', 'height_cm', 'height_in', 'low_cm', 'high_cm',
+    'flight_time_only_cm', 'flight_time_ms', 'confidence']];
+  const cm = (m) => (Number.isFinite(m) ? (m * 100).toFixed(1) : '');
   rec.jumps.forEach((j, i) => rows.push([
     rec.startedAt, i + 1, (j.athlete || 0) + 1, new Date(j.at).toISOString(),
-    (j.heightM * 100).toFixed(1), (j.heightM * 39.3701).toFixed(1),
+    (j.heightM * 100).toFixed(1), (j.heightM * 39.3701).toFixed(1), cm(j.lowM), cm(j.highM), cm(j.flightHeightM),
     Math.round(j.flightTime * 1000), j.confidence,
   ]));
   return `${rows.map((r) => r.map(cell).join(',')).join('\n')}\n`;

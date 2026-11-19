@@ -70,6 +70,44 @@ function lstsq(rows, ys) {
 // Polynomial (degree 1 or 2) of y on x: [c0, c1, c2?].
 const polyfit = (xs, ys, deg) => lstsq(xs.map((x) => [1, x, x * x].slice(0, deg + 1)), ys);
 
+// ---- height and how sure it is
+//
+// Flight time gives the height exactly only if the body is in the same posture at
+// takeoff and landing. Two departures from that are measured and allowed for:
+//
+// - Bent-knee landing. The hips are lower at touchdown than at takeoff, so the fall
+//   takes longer than the rise and g·T²/8 reads high. The hips' free-fall arc gives the
+//   size of that drop, and a third of it comes off the height.
+// - Knees tucked in flight. The feet rise more than the hips, the feet stop following a
+//   parabola, and the fallback timing reads about a centimetre low.
+//
+// The 95% range combines timing precision (coarser with fewer frames in the air) with
+// the uncertainty of each adjustment. The constants were tuned on simulated jumps
+// (heights 20–70 cm, 30–120 fps, tucks to 15 cm, bent landings to 15 cm), where the
+// range held the true height in 98–99% of jumps. They have not been checked against
+// measured jumps by real athletes.
+const EST = {
+  dropFrom: 0.015, dropGain: 0.33, dropSpread: 0.3, // bent landing: threshold (m), share removed, its sd as a share
+  foldFrom: 0.025, foldGain: 0.012, foldSpread: 0.007, // tuck: threshold (m), amount added (m), its sd (m)
+  timeBase: 0.004, timePerFrame: 0.25, // flight-time sd (s): base + share of one frame interval
+  blind: 0.02, // extra sd (m) when too few frames were seen to check posture at all
+  moved: 0.015, // extra sd (m) when the landing spot was not the takeoff spot
+};
+
+export function estimateHeight({ flightTime: T, frames, dropM, foldM, moved = false }) {
+  const flightHeightM = heightFromFlightTime(T);
+  const seen = Number.isFinite(dropM);
+  const bentLandingM = seen && dropM > EST.dropFrom ? -EST.dropGain * (dropM - EST.dropFrom) : 0;
+  const tuckM = Number.isFinite(foldM) && foldM > EST.foldFrom ? EST.foldGain : 0;
+  const sdTime = ((G * T) / 4) * (EST.timeBase + EST.timePerFrame * (T / Math.max(1, frames)));
+  const sd = Math.hypot(sdTime, EST.dropSpread * bentLandingM, tuckM ? EST.foldSpread : 0, seen ? 0 : EST.blind, moved ? EST.moved : 0);
+  const heightM = Math.max(0, flightHeightM + bentLandingM + tuckM);
+  return {
+    heightM, flightHeightM, bentLandingM, tuckM,
+    lowM: Math.max(0, heightM - 1.96 * sd), highM: heightM + 1.96 * sd,
+  };
+}
+
 export class JumpDetector {
   constructor(options = {}) {
     this.opt = { ...DEFAULTS, ...options };
@@ -267,8 +305,10 @@ export class JumpDetector {
       const [k0, k1, k2] = polyfit(pts.map((q) => q.t - tm), pts.map(lift), 2);
       const root = (level, sgn) => tm + (-k1 + sgn * Math.sqrt(k1 * k1 - 4 * k2 * (k0 - level))) / (2 * k2);
       // How far the foot strayed from the hips' free fall over the fitted span (posture change).
-      const bend = Math.abs(k2 + c) * ((pts.at(-1).t - pts[0].t) / 2) ** 2 / b.L;
-      return { up: root(0, 1), down: root(b[foot] - ground[foot], -1), bend };
+      const half = ((pts.at(-1).t - pts[0].t) / 2) ** 2;
+      const bend = Math.abs(k2 + c) * half / b.L;
+      // Signed: positive when the foot rose more than the hips mid-flight (knees tucked).
+      return { up: root(0, 1), down: root(b[foot] - ground[foot], -1), bend, fold: -(k2 + c) * half };
     };
     const m = b.margin * b.L;
     const hinge = (foot, rising) => {
@@ -336,6 +376,8 @@ export class JumpDetector {
     let conf = 2; // 2 high, 1 medium, 0 low
     const flag = (level, note) => { conf = Math.min(conf, level); notes.push(note); };
     let bodyM = NaN; // body length implied by gravity; says whether the clock is real time
+    let dropM = NaN, foldM = NaN; // posture: hips lower at landing than takeoff; legs folded mid-flight (m)
+    let freeFall = Boolean(hipFit); // the hips followed a clean gravity arc of a plausible size
     if (hipFit) {
       const scale = G / (2 * c); // metres per image unit
       bodyM = b.L * scale;
@@ -345,15 +387,18 @@ export class JumpDetector {
         // A tiny "hop" seen in a few frames that is not a free fall: a tracking glitch.
         if (air.length < 6 && T < 0.25) return fail('Body did not move like a free flight');
         flag(0, 'Your body did not move like a clean free flight, so this may not be accurate');
+        freeFall = false;
       }
       const hipAt = (tt) => hipFit[0] + hipFit[1] * (tt - tm) + hipFit[2] * (tt - tm) ** 2;
       const rms = Math.sqrt(air.reduce((acc, q) => acc + (q.h - hipAt(q.t)) ** 2, 0) / air.length);
-      if (rms > Math.max(4 * b.noise, 0.02) * b.L) flag(0, 'Tracking was unsteady during the jump');
+      if (rms > Math.max(4 * b.noise, 0.02) * b.L) { flag(0, 'Tracking was unsteady during the jump'); freeFall = false; }
       // Hips lower at touchdown than at takeoff (bent knees, tucked landing) stretch the
       // flight time and inflate the height; the reverse deflates it.
       const drop = (hipAt(landingT) - hipAt(takeoffT)) * scale;
-      if (drop > o.dropNote) flag(drop > o.dropLow ? 0 : 1, `${NOTE_LOWER_LANDING}, so the height may be overestimated. Land with straight legs, then bend`);
-      else if (drop < -o.dropNote) flag(drop < -o.dropLow ? 0 : 1, `${NOTE_LOWER_TAKEOFF}, so the height may be underestimated`);
+      dropM = drop;
+      if (W[0] && W[1]) foldM = ((W[0].fold + W[1].fold) / 2) * scale;
+      if (drop > o.dropNote) flag(drop > o.dropLow ? 0 : 1, `${NOTE_LOWER_LANDING}${LOWER_LANDING_REST}`);
+      else if (drop < -o.dropNote) flag(drop < -o.dropLow ? 0 : 1, `${NOTE_LOWER_TAKEOFF}${LOWER_TAKEOFF_REST}`);
     } else flag(0, 'Too few video frames in the air to measure this jump reliably');
     if (air.length < 6) flag(1, `Only ${air.length} video frames in the air, so timing is coarse`);
     if (f.gaps) flag(1, 'Tracking dropped out briefly during the jump');
@@ -362,8 +407,10 @@ export class JumpDetector {
     // Same spot → keep the baseline and stay ready for the next jump; else re-learn the ground.
     if (shift > o.levelNote) { this.base = null; this.phase = 'settling'; } else this.phase = 'ready';
     return {
-      takeoffT, landingT, flightTime: T, heightM: heightFromFlightTime(T),
-      confidence: ['low', 'medium', 'high'][conf], notes, bodyM,
+      takeoffT, landingT, flightTime: T,
+      confidence: ['low', 'medium', 'high'][conf], notes, bodyM, apexT: hipFit ? tApex : NaN,
+      dropM, foldM, freeFall, rigid: Boolean(rigid), frames: air.length, moved: shift > o.levelNote,
+      ...estimateHeight({ flightTime: T, frames: air.length, dropM, foldM, moved: shift > o.levelNote }),
     };
   }
 }
@@ -384,6 +431,7 @@ export class JumpDetector {
 //    baseline, and a clip that starts mid-crouch is still measured.
 export const PLAY_RATES = [1, 2, 4, 8];
 const BODY_M = 1.35; // typical adult shoulder–ankle length
+const RATE_TOL = 1; // octaves the implied body may be from BODY_M for a play rate to be believed
 // Clips are often trimmed tight and filmed hand-held, so less standing still is asked
 // for than live (feet only, a quarter of a second), and landing a little nearer or
 // farther from the camera is tolerated. A clip was chosen because it holds a jump, so
@@ -392,22 +440,36 @@ const RECORDING = { settleWindow: 0.25, stillHips: false, levelReject: 0.12 };
 
 const NOTE_LOWER_LANDING = 'Landing looked lower than takeoff';
 const NOTE_LOWER_TAKEOFF = 'Takeoff looked lower than landing';
+const LOWER_LANDING_REST = ' (bent knees), so the height has been adjusted down. Land with straight legs, then bend';
+const LOWER_TAKEOFF_REST = ', so the height may be underestimated';
 
+// Runs a detector over a whole clip. readyAt is when it first had a ground level to
+// measure against (Infinity if it never did).
 function detectAll(samples, options) {
   const det = new JumpDetector(options), jumps = [];
-  for (const s of samples) { const { jump } = det.push(s); if (jump) jumps.push(jump); }
+  let readyAt = Infinity;
+  for (const s of samples) {
+    const { jump, status } = det.push(s);
+    if (jump) jumps.push(jump);
+    if (status === 'ready' && readyAt === Infinity) readyAt = s.t;
+  }
   const last = det.flush();
   if (last) jumps.push(last);
-  return jumps;
+  return { jumps, readyAt };
 }
 
 // A jump found in the reversed clip, put back in forward time: takeoff and landing
 // swap, and so do the notes about which end was lower.
 function unreverse(j) {
-  const swap = (n) => (n.startsWith(NOTE_LOWER_LANDING) ? `${NOTE_LOWER_TAKEOFF}, so the height may be underestimated`
-    : n.startsWith(NOTE_LOWER_TAKEOFF) ? `${NOTE_LOWER_LANDING}, so the height may be overestimated. Land with straight legs, then bend`
+  const swap = (n) => (n.startsWith(NOTE_LOWER_LANDING) ? `${NOTE_LOWER_TAKEOFF}${LOWER_TAKEOFF_REST}`
+    : n.startsWith(NOTE_LOWER_TAKEOFF) ? `${NOTE_LOWER_LANDING}${LOWER_LANDING_REST}`
       : n);
-  return { ...j, takeoffT: -j.landingT, landingT: -j.takeoffT, notes: j.notes.map(swap) };
+  // Which end was lower flips too, so the height is worked out again the right way round.
+  const dropM = -j.dropM;
+  return {
+    ...j, takeoffT: -j.landingT, landingT: -j.takeoffT, apexT: -j.apexT, dropM, notes: j.notes.map(swap),
+    ...estimateHeight({ flightTime: j.flightTime, frames: j.frames, dropM, foldM: j.foldM, moved: j.moved }),
+  };
 }
 
 const RANK = { low: 0, medium: 1, high: 2 };
@@ -420,19 +482,34 @@ export function analyseRecording(samples, { rates = PLAY_RATES, options } = {}) 
   let best = null;
   for (const rate of rates) {
     const fwd = detectAll(samples.map((s) => ({ ...s, t: s.t / rate })), options);
-    const rev = detectAll(samples.slice().reverse().map((s) => ({ ...s, t: -s.t / rate })), options).map(unreverse);
+    const rev = detectAll(samples.slice().reverse().map((s) => ({ ...s, t: -s.t / rate })), options).jumps.map(unreverse);
     // The same jump seen in both directions: keep the more confident reading.
-    const jumps = [...fwd];
+    const jumps = [...fwd.jumps];
     for (const r of rev) {
       const i = jumps.findIndex((f) => f.takeoffT < r.landingT && r.takeoffT < f.landingT);
-      if (i < 0) jumps.push(r);
-      else if (RANK[r.confidence] > RANK[jumps[i].confidence]) jumps[i] = r;
+      if (i >= 0) { if (RANK[r.confidence] > RANK[jumps[i].confidence]) jumps[i] = r; continue; }
+      // Seen only backwards. That is what the reverse pass is for when the clip starts
+      // mid-jump, before the forward pass has a ground level. Later than that, the forward
+      // pass looked at the same moment and saw no jump, and it is the one to believe: if
+      // the athlete landed nearer the camera, then seen backwards they stand "above" the
+      // new ground level at their old spot, which looks like hovering.
+      if (r.takeoffT < fwd.readyAt) jumps.push(r);
     }
     if (!jumps.length) continue;
     jumps.sort((a, b) => a.takeoffT - b.takeoffT);
-    // How far from human-sized the implied body is, in octaves; unknown counts as far.
-    const off = jumps.map((j) => (j.bodyM > 0 ? Math.abs(Math.log2(j.bodyM / BODY_M)) : 3));
-    const score = off.reduce((a, b) => a + b, 0) / off.length;
+    // How far from person-sized the implied body is, in octaves. A wrong rate is two
+    // octaves out, so more than one octave is not this clip's rate: without this, a jump
+    // that the true rate rejects (say, for landing somewhere else) would be reported at
+    // another rate, with a height a quarter or four times the real one. When too few
+    // frames were seen to tell, only real time is believed.
+    // Only flights that moved like a free fall can vouch for a rate: at a wrong rate the
+    // fits are poor, and a poor fit can land on a plausible body size by chance.
+    const sure = jumps.filter((j) => j.bodyM > 0 && j.freeFall).map((j) => Math.abs(Math.log2(j.bodyM / BODY_M)));
+    let score = sure.length ? sure.reduce((a, b) => a + b, 0) / sure.length : Infinity;
+    // Real time needs no proof (the detector's own checks stand), but a slow-motion rate
+    // that is vouched for beats a real-time reading that is not.
+    if (rate === 1) score = Math.min(score, RATE_TOL);
+    else if (score > RATE_TOL) continue;
     if (!best || score < best.score) best = { rate, jumps, score };
   }
   // score: how far from person-sized the implied body is at this rate (lower is surer).

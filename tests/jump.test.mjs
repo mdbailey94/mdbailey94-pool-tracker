@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
-import { G, heightFromFlightTime, JumpDetector, analyseRecording } from '../src/jump.js';
+import { G, heightFromFlightTime, estimateHeight, JumpDetector, analyseRecording } from '../src/jump.js';
 import { simulate, run } from './support/jump-sim.mjs';
 
 const stand = (dur = 1.5) => ({ type: 'stand', dur });
@@ -54,7 +54,10 @@ const ACCURACY = [
   // fps, noise, mean, p90, max (cm), |bias| (cm), misses allowed
   [60, 0.004, 0.6, 1.1, 1.7, 0.5, 0],
   [60, 0.008, 0.7, 1.6, 2.5, 0.5, 0],
-  [60, 0.015, 1.15, 2.4, 4.7, 0.5, 2],
+  // p90 was 2.0 before posture adjustments: with landmarks this noisy the hip-drop measure
+  // sometimes sees a bent landing that is not there. The mean is unchanged, and real bent
+  // landings go from reading 4 cm high to under 1 (see the posture tests below).
+  [60, 0.015, 1.15, 2.6, 4.7, 0.5, 2],
   [30, 0.004, 0.8, 1.5, 3.3, 0.5, 0],
   [30, 0.008, 1.05, 2.4, 4.5, 0.5, 0],
   [30, 0.015, 1.6, 3.4, 6.3, 0.5, 2],
@@ -85,7 +88,7 @@ test('accuracy without pose smoothing (raw landmarks)', (t) => {
   assert.ok(s.mean <= 1.0 && s.max <= 3.8 && Math.abs(s.bias) <= 0.8, fmt(s));
 });
 
-test('knee tuck in flight (re-extended before landing) costs about 1.5 cm', (t) => {
+test('knee tuck in flight (re-extended before landing) is allowed for', (t) => {
   // Feet no longer follow the hips' parabola, so the detector falls back to the hinge fit.
   const s = sweep({ fps: 30, noise: 0.008, seeds: 10, jump: { tuck: 0.1 } });
   t.diagnostic(fmt(s));
@@ -164,15 +167,25 @@ test('a dropped frame or two mid-flight keeps the jump, with a note', () => {
   }
 });
 
-test('bent-knee landing lowers confidence and says why', () => {
-  for (const fps of [15, 30, 60]) for (let seed = 1; seed <= 6; seed++) {
-    const { samples } = simulate({ seed, fps, noise: 0.008, script: [stand(), { type: 'jump', height: 0.4, landBend: 0.12 }, stand(1)] });
-    const { jumps } = run(new JumpDetector(), samples);
-    assert.equal(jumps.length, 1);
-    // Flight time really is longer, so the height is overestimated: that is what the note is for.
-    assert.ok(jumps[0].heightM > 0.42);
-    assert.notEqual(jumps[0].confidence, 'high', `${fps} fps seed ${seed}`);
-    assert.ok(jumps[0].notes.some((n) => /Landing looked lower than takeoff/.test(n)));
+test('bent-knee landing lowers confidence, says why, and is adjusted for', () => {
+  for (const fps of [15, 30, 60]) {
+    let adj = 0, raw = 0;
+    for (let seed = 1; seed <= 6; seed++) {
+      const { samples, truth } = simulate({ seed, fps, noise: 0.008, script: [stand(), { type: 'jump', height: 0.4, landBend: 0.12 }, stand(1)] });
+      const { jumps } = run(new JumpDetector(), samples);
+      assert.equal(jumps.length, 1);
+      const j = jumps[0], h = truth[0].heightM;
+      assert.notEqual(j.confidence, 'high', `${fps} fps seed ${seed}`);
+      assert.ok(j.notes.some((n) => /Landing looked lower than takeoff/.test(n)));
+      // The fall really is longer than the rise, so flight time alone reads high; the
+      // reported height takes the hips' drop off, and its range holds the true height.
+      assert.ok(j.bentLandingM < -0.02, `${fps} fps seed ${seed}: adjustment ${j.bentLandingM}`);
+      assert.ok(j.lowM <= h && h <= j.highM, `${fps} fps seed ${seed}: ${h} outside ${j.lowM}–${j.highM}`);
+      adj += Math.abs(j.heightM - h) / 6;
+      raw += Math.abs(j.flightHeightM - h) / 6;
+    }
+    assert.ok(raw > 0.03, `${fps} fps: flight time alone is only ${raw} m off`);
+    assert.ok(adj < raw / 2, `${fps} fps: adjusted ${adj} m off vs ${raw} m for flight time alone`);
   }
 });
 
@@ -313,4 +326,81 @@ test('recording: repeated jumps are each reported once, in order', () => {
   const r = analyseRecording(samples);
   assert.equal(r.jumps.length, 2);
   r.jumps.forEach((j, i) => assert.ok(Math.abs(j.heightM - truth[i].heightM) < 0.04, `jump ${i}: ${j.heightM} vs ${truth[i].heightM}`));
+});
+
+
+// ---- height estimate: posture adjustments and the 95% range
+
+test('estimateHeight: plain flight time when posture matches, adjusted when it does not', () => {
+  const T = 0.6, flight = heightFromFlightTime(T);
+  const clean = estimateHeight({ flightTime: T, frames: 36, dropM: 0.005, foldM: 0 });
+  assert.equal(clean.heightM, flight);
+  assert.equal(clean.bentLandingM, 0);
+  assert.equal(clean.tuckM, 0);
+  assert.ok(clean.lowM < flight && flight < clean.highM);
+  // Hips 10 cm lower at landing: about a third of that comes off, and the range widens.
+  const bent = estimateHeight({ flightTime: T, frames: 36, dropM: 0.1, foldM: 0 });
+  assert.ok(bent.heightM < flight - 0.02 && bent.heightM > flight - 0.04, `${bent.heightM} vs ${flight}`);
+  assert.equal(bent.flightHeightM, flight);
+  assert.ok(bent.highM - bent.lowM > clean.highM - clean.lowM);
+  // Hips lower at takeoff than landing is noted elsewhere but not adjusted for.
+  assert.equal(estimateHeight({ flightTime: T, frames: 36, dropM: -0.1, foldM: 0 }).heightM, flight);
+  // Knees tucked: a little is added back.
+  assert.ok(estimateHeight({ flightTime: T, frames: 36, dropM: 0, foldM: 0.08 }).heightM > flight);
+  // Fewer frames in the air means a wider range; so does not being able to check posture.
+  const few = estimateHeight({ flightTime: T, frames: 9, dropM: 0, foldM: 0 });
+  assert.ok(few.highM - few.lowM > clean.highM - clean.lowM);
+  const blind = estimateHeight({ flightTime: T, frames: 36, dropM: NaN, foldM: NaN });
+  assert.ok(blind.highM - blind.lowM > clean.highM - clean.lowM);
+  assert.ok(estimateHeight({ flightTime: 0.16, frames: 3, dropM: 0.2, foldM: 0 }).lowM >= 0);
+});
+
+// The claim behind "95% range": across clean jumps, tucks and bent landings, the true
+// height falls inside the reported range at least that often, and the reported height
+// is closer to the truth than flight time alone when the landing is bent.
+test('95% range holds the true height; bent landings and tucks are corrected', (t) => {
+  const CONDS = { clean: {}, 'tuck 5 cm': { tuck: 0.05 }, 'tuck 10 cm': { tuck: 0.1 }, 'bend 5 cm': { landBend: 0.05 }, 'bend 10 cm': { landBend: 0.1 }, 'bend 15 cm': { landBend: 0.15 } };
+  let inside = 0, n = 0;
+  for (const [name, jump] of Object.entries(CONDS)) {
+    const adj = [], raw = [];
+    let hit = 0, m = 0, missed = 0;
+    for (const fps of [30, 60, 120]) for (const h of [0.25, 0.4, 0.55]) for (let seed = 1; seed <= 6; seed++) {
+      const { samples, truth } = simulate({ seed: seed * 53 + fps + Math.round(h * 100), fps, noise: 0.008, smoothing: {}, script: [stand(1.2), { type: 'jump', height: h, ...jump }, stand(1)] });
+      const j = analyseRecording(samples).jumps[0];
+      // A deep bend on a small jump at a low frame rate can be too distorted to accept.
+      if (!j) { missed++; continue; }
+      const true_ = truth[0].heightM;
+      adj.push((j.heightM - true_) * 100);
+      raw.push((j.flightHeightM - true_) * 100);
+      if (j.lowM <= true_ && true_ <= j.highM) hit++;
+      m++;
+    }
+    const mean = (a) => a.reduce((x, y) => x + y, 0) / a.length;
+    t.diagnostic(`${name}: reported ${mean(adj).toFixed(1)} cm off on average (flight time alone ${mean(raw).toFixed(1)}), true height inside the range ${Math.round((100 * hit) / m)}%`);
+    assert.ok(missed <= (/bend 15/.test(name) ? 3 : 0), `${name}: ${missed} jumps not found`);
+    assert.ok(hit / m >= 0.9, `${name}: only ${hit}/${m} inside the range`);
+    assert.ok(Math.abs(mean(adj)) < 1.2, `${name}: reported height off by ${mean(adj).toFixed(2)} cm on average`);
+    if (/bend 1/.test(name)) assert.ok(Math.abs(mean(adj)) < Math.abs(mean(raw)) / 3, `${name}: ${mean(adj)} vs ${mean(raw)}`);
+    inside += hit; n += m;
+  }
+  assert.ok(inside / n >= 0.95, `overall ${inside}/${n} inside the range`);
+});
+
+// A jump that lands away from the takeoff spot shifts the ground level in the picture.
+// It must be read about right or not at all: never at the wrong play rate (which would
+// report a quarter of the height), and never as a second, false jump.
+test('recording: landing nearer or farther from the camera is read right or not reported', () => {
+  for (const slow of [1, 4]) for (const forward of [-0.3, -0.15, 0.15, 0.3]) {
+    let found = 0;
+    for (const fps of [30, 60, 120]) for (const h of [0.25, 0.4, 0.55]) for (let seed = 1; seed <= 4; seed++) {
+      const { samples, truth } = simulate({ seed: seed * 31 + fps, fps, noise: 0.008, smoothing: {}, script: [stand(1.2), { type: 'jump', height: h, forward }, stand(1)] });
+      const r = analyseRecording(samples.map((s) => ({ ...s, t: s.t * slow })));
+      assert.ok(r.jumps.length <= 1, `forward ${forward} ${fps} fps ${h} m seed ${seed}: ${r.jumps.length} jumps`);
+      if (!r.jumps.length) continue;
+      found++;
+      assert.equal(r.rate, slow, `forward ${forward} ${fps} fps ${h} m seed ${seed}: read at ${r.rate}x, clip is ${slow}x`);
+      assert.ok(Math.abs(r.jumps[0].heightM - truth[0].heightM) < 0.05, `forward ${forward} ${fps} fps ${h} m seed ${seed}: ${r.jumps[0].heightM} vs ${truth[0].heightM}`);
+    }
+    if (Math.abs(forward) <= 0.15 && forward > 0) assert.ok(found > 0, `forward ${forward}: nothing found`);
+  }
 });

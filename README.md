@@ -56,10 +56,22 @@ still before the jump.
 Takeoff and landing usually fall between two frames. The detector estimates where between them, so the timing
 is finer than the frame rate. More frames per second still helps.
 
-This only works if you take off and land in a similar posture. The formula assumes your body is in the same
-position at both moments. If you land with bent knees, your feet touch down later than they would with straight
-legs, the flight time is longer, and the height is overestimated. Tucking your legs in the air has the opposite
-effect. Each jump gets a confidence rating, and the screen explains why when it is not high.
+Flight time gives the height exactly only if you take off and land in the same posture. The formula assumes
+your body is in the same position at both moments. Two common departures are measured and allowed for:
+
+- **Bent-knee landing.** Your feet touch down later than they would with straight legs, so the fall takes
+  longer than the rise and flight time alone reads high. The app measures how much lower your hips are at
+  landing than at takeoff and takes about a third of that off the height.
+- **Knees tucked in the air.** The feet stop following a simple arc and the timing reads about a centimetre
+  low, so a little is added back.
+
+Each jump is shown with a **95% range**: the span the true height is expected to fall in 95 times out of
+100. It is wider with fewer frames in the air, after a posture adjustment, and when you land somewhere other
+than where you took off. When an adjustment was made, the screen also shows what flight time alone gives.
+Each jump still gets a confidence rating, and the screen explains why when it is not high.
+
+A jump that lands well away from the takeoff spot is not reported at all: the ground sits at a different
+place in the picture and the timing cannot be trusted.
 
 ## Accuracy
 
@@ -68,6 +80,11 @@ them, compare against a known measure, such as a jump mat or a wall reach test, 
 
 What has been checked:
 
+- The posture adjustments and the 95% range were tuned and tested on simulated jumps only (20 to 70 cm,
+  30 to 120 frames per second, knee tucks up to 15 cm, bent landings up to 15 cm). There the true height
+  fell inside the range in 98 to 99 jumps out of 100, and a 10 cm bent landing read 0.4 cm off where flight
+  time alone read 4.4 cm high. How real bodies move may differ, so treat the range as a guide until it has
+  been compared with measured jumps.
 - Simulated jumps (15 to 80 cm, with landmark jitter, uneven frame timing and dropped frames): the average
   error is about 0.6 cm at 60 frames per second and 0.9 cm at 30, with worst cases of about 2 cm and 4 cm.
   Short jumps at low frame rates are the least precise.
