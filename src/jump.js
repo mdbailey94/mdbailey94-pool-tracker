@@ -251,7 +251,7 @@ export class JumpDetector {
       const root = (level, sgn) => tm + (-k1 + sgn * Math.sqrt(k1 * k1 - 4 * k2 * (k0 - level))) / (2 * k2);
       // How far the foot strayed from the hips' free fall over the fitted span (posture change).
       const bend = Math.abs(k2 + c) * ((pts.at(-1).t - pts[0].t) / 2) ** 2 / b.L;
-      return { up: root(0, 1), down: root(b[foot] - ground[foot], -1), bend, pts };
+      return { up: root(0, 1), down: root(b[foot] - ground[foot], -1), bend };
     };
     const m = b.margin * b.L;
     const hinge = (foot, rising) => {
@@ -298,22 +298,6 @@ export class JumpDetector {
     const W = [whole('l'), whole('r')];
     const rigid = hipFit && W.every((w) => w && w.bend < o.rigidTol && Number.isFinite(w.up + w.down));
     if (o.debug) console.log('rigid', rigid, W, 'ground', ground, 'base', b, 'tApex', tApex, 'c', c);
-    if (rigid && o.joint) {
-      // Shared curvature for both feet and the hips; offsets and slopes per stream.
-      const streams = [[W[0].pts, (q) => b.l - q.l], [W[1].pts, (q) => b.r - q.r], ...(o.joint > 1 ? [[air, (q) => b.h - q.h]] : [])];
-      const rows = [], ys = [], np = 2 * streams.length + 1;
-      streams.forEach(([pts, val], k) => pts.forEach((q) => {
-        const x = new Array(np).fill(0), tau = q.t - tm;
-        x[2 * k] = 1; x[2 * k + 1] = tau; x[np - 1] = tau * tau;
-        rows.push(x); ys.push(val(q));
-      }));
-      const P = lstsq(rows, ys), k2 = P[np - 1];
-      ['l', 'r'].forEach((foot, k) => {
-        const k0 = P[2 * k], k1 = P[2 * k + 1];
-        const root = (level, sgn) => tm + (-k1 + sgn * Math.sqrt(k1 * k1 - 4 * k2 * (k0 - level))) / (2 * k2);
-        W[k].up = root(0, 1); W[k].down = root(b[foot] - ground[foot], -1);
-      });
-    }
     const takeoffT = rigid ? Math.max(W[0].up, W[1].up) : Math.max(hinge('l', true), hinge('r', true));
     const landingT = rigid ? Math.min(W[0].down, W[1].down) : Math.min(hinge('l', false), hinge('r', false));
     const T = landingT - takeoffT;
