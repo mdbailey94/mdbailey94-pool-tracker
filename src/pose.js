@@ -13,8 +13,44 @@ export const POSE_CONNECTIONS = [
   [27, 29], [28, 30], [29, 31], [30, 32], [27, 31], [28, 32],
 ];
 
-const MIN_VIS = 0.5; // hips, ankles, heels, toes must be at least this visible
-const NEEDED = [23, 24, 27, 28, 29, 30, 31, 32];
+// Only the legs are measured. Landmark indices per side: hip, knee, ankle, heel, toe.
+const LEGS = { L: [23, 25, 27, 29, 31], R: [24, 26, 28, 30, 32] };
+const MIN_VIS = 0.5; // the better-seen leg's ankle, heel and toe must be at least this visible
+// Side-on, the far leg is hidden behind the near one for much of a jump. The model
+// still places it sensibly, so it is accepted at a much lower visibility; below this
+// the near leg stands in for it.
+const FAR_VIS = 0.15;
+// Shoulder-to-ankle length is about 1.6 x thigh + shank. The detector scales its
+// thresholds by the former; measuring it from the leg means the upper body is not needed.
+const BODY_PER_LEG = 1.6;
+const NONE = { footL: NaN, footR: NaN, hipY: NaN, bodyLen: NaN, visible: false };
+
+// Landmarks (33 x {x, y, visibility}, normalised to the frame) -> the detector's
+// sample. y is normalised to frame height, increasing downward; aspect = width / height.
+// Pure, so it can be tested without a browser.
+export function legSample(P, aspect = 1) {
+  if (!P) return { ...NONE };
+  const leg = (side) => {
+    const [hip, knee, ankle, heel, toe] = LEGS[side].map((i) => P[i]);
+    const dist = (a, b) => Math.hypot((a.x - b.x) * aspect, a.y - b.y);
+    return {
+      vis: Math.min(ankle.visibility, heel.visibility, toe.visibility),
+      inFrame: [heel, toe].every((q) => q.x >= 0 && q.x <= 1 && q.y >= 0 && q.y <= 1),
+      foot: Math.max(heel.y, toe.y), // lowest point of the foot
+      len: dist(hip, knee) + dist(knee, ankle), // unchanged by bending the knee
+    };
+  };
+  const l = leg('L'), r = leg('R');
+  const best = l.vis >= r.vis ? l : r, other = best === l ? r : l;
+  const otherOk = other.vis >= FAR_VIS && other.inFrame;
+  return {
+    footL: l === best || otherOk ? l.foot : best.foot,
+    footR: r === best || otherOk ? r.foot : best.foot,
+    hipY: (P[23].y + P[24].y) / 2,
+    bodyLen: BODY_PER_LEG * best.len,
+    visible: best.vis >= MIN_VIS && best.inFrame && Math.max(P[23].visibility, P[24].visibility) >= MIN_VIS,
+  };
+}
 
 export async function createPoseTracker() {
   // Dynamic import keeps the heavy bundle off the app's startup path.
@@ -36,7 +72,6 @@ export async function createPoseTracker() {
   }
 
   let lastMs = -1, offset = 0;
-  const none = { footL: NaN, footR: NaN, hipY: NaN, bodyLen: NaN, visible: false };
 
   // t in seconds. y values are returned raw: no temporal smoothing, because
   // filtering would lag/blur the takeoff and landing edges the jump timing uses.
@@ -49,21 +84,9 @@ export async function createPoseTracker() {
     ms = Math.max(ms, lastMs + 1);
     lastMs = ms;
     const lm = landmarker.detectForVideo(video, ms).landmarks?.[0];
-    if (!lm) return { landmarks: null, sample: { ...none } };
+    if (!lm) return { landmarks: null, sample: { ...NONE } };
     const landmarks = lm.map((p) => ({ x: p.x, y: p.y, visibility: p.visibility ?? 0 }));
-    const P = landmarks;
-    const mid = (a, b, k) => (P[a][k] + P[b][k]) / 2;
-    // Normalise to frame height (x scaled by W/H) so bodyLen is isotropic.
-    const ar = video.videoWidth / video.videoHeight || 1;
-    const sample = {
-      footL: Math.max(P[29].y, P[31].y),
-      footR: Math.max(P[30].y, P[32].y),
-      hipY: mid(23, 24, 'y'),
-      bodyLen: Math.hypot((mid(11, 12, 'x') - mid(27, 28, 'x')) * ar, mid(11, 12, 'y') - mid(27, 28, 'y')),
-      visible:
-        NEEDED.every((i) => P[i].visibility >= MIN_VIS) &&
-        [29, 30, 31, 32].every((i) => P[i].x >= 0 && P[i].x <= 1 && P[i].y >= 0 && P[i].y <= 1),
-    };
+    const sample = legSample(landmarks, video.videoWidth / video.videoHeight || 1);
     return { landmarks, sample };
   }
 

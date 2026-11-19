@@ -2,8 +2,15 @@
 // file, delivered as the <video> element itself plus a per-frame timestamp in
 // seconds. Jump height comes from flight time, so frame timing is the product.
 
-// Video files are assumed to hold at most 120 frames per second.
-const FILE_RATE = 0.4; // a little under half speed, so 120 fps never outruns a 60 Hz screen
+// Frame callbacks fire at most once per screen refresh, so a file must be played
+// slowly enough that each of its frames gets its own refresh. Its frame rate is
+// not known up front, so the first frames are played very slowly while the
+// spacing of their timestamps is measured; playback then runs as fast as that
+// frame rate allows on a 60 Hz screen, with a little margin.
+const PROBE_RATE = 0.2; // slow enough for anything up to 240 fps
+const PROBE_FRAMES = 8;
+const SAFE_FPS = 48; // frames presented per second of wall time, under 60 Hz
+const fileRate = (fps) => Math.min(1, Math.max(0.1, SAFE_FPS / fps));
 
 export function cameraSupported() {
   return Boolean(navigator.mediaDevices?.getUserMedia) && window.isSecureContext;
@@ -13,6 +20,7 @@ export class VideoSource {
   constructor(video) {
     this.gen = 0;
     this.busy = false;
+    this.gaps = [];
     this.onVisibility = null;
     this.video = video;
     this.stream = null;
@@ -55,10 +63,9 @@ export class VideoSource {
     this.live = false;
     this.fps = null;
     Object.assign(this.video, { muted: true, playsInline: true, loop: false, srcObject: null, src: this.url });
-    // Frame callbacks fire at most once per screen refresh, so a file is played
-    // slowly enough that each of its frames gets its own refresh (up to 120 fps
-    // on a 60 Hz screen). Timing comes from mediaTime, so speed doesn't affect it.
-    this.video.playbackRate = FILE_RATE;
+    // Timing comes from mediaTime, so playback speed doesn't affect the result.
+    this.video.playbackRate = PROBE_RATE;
+    this.gaps = [];
     const info = await this.ready();
     // Show the first frame so the user can check the framing.
     this.video.currentTime = Math.min(0.1, this.video.duration || 0);
@@ -83,6 +90,8 @@ export class VideoSource {
     this.running = true;
     this.lastT = -Infinity;
     if (!this.live) {
+      // openFile parks the video just past the start to show a frame; measure from the top.
+      if (this.video.currentTime < 0.5) this.video.currentTime = 0;
       this.video.play().catch(() => {});
       // A hidden tab stops frame callbacks but not playback, which would skip
       // frames unseen: hold the file while hidden.
@@ -115,6 +124,7 @@ export class VideoSource {
     if (!this.running) return;
     // Never emit a non-increasing t (repeated frame, seek back, clock quirk).
     if (t > this.lastT && this.video.readyState >= 2) {
+      if (!this.live && this.fps == null && Number.isFinite(this.lastT)) this.probe(t - this.lastT);
       this.lastT = t;
       // A file is held on this frame while it is processed, so slow pose
       // inference costs time instead of frames: every frame of the clip is
@@ -130,6 +140,17 @@ export class VideoSource {
       if (!this.live && this.running && !this.video.ended && !document.hidden) this.video.play().catch(() => {});
     }
     this.schedule();
+  }
+
+  // Works out a file's frame rate from the spacing of its first frames (the
+  // median, so a variable-rate recording's odd gap doesn't matter), then sets
+  // the playback speed to suit. source.fps stays null until this is known.
+  probe(gap) {
+    this.gaps.push(gap);
+    if (this.gaps.length < PROBE_FRAMES) return;
+    const mid = [...this.gaps].sort((a, b) => a - b)[this.gaps.length >> 1];
+    this.fps = Math.round(1 / mid);
+    this.video.playbackRate = fileRate(this.fps);
   }
 
   stop() {
