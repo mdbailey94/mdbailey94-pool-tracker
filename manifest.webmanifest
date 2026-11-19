@@ -1,7 +1,7 @@
 {
-  "name": "Pool Tracker",
-  "short_name": "Pool Tracker",
-  "description": "Lap times, stroke rate and stroke count for every lane, from one camera watching the pool.",
+  "name": "Jump Height",
+  "short_name": "Jump Height",
+  "description": "Estimate your vertical jump from flight time, using a phone camera.",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
