@@ -1,9 +1,9 @@
 {
-  "name": "pool-tracker",
+  "name": "jump-height",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Lap times, stroke rate and stroke count for every lane, from one camera watching the pool.",
+  "description": "Estimate your vertical jump from flight time, using a phone camera.",
   "scripts": {
     "test": "node --test tests/*.test.mjs",
     "start": "python3 -m http.server 8080"

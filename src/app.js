@@ -1,592 +1,636 @@
-// Pool Tracker UI: pick a video source, line up the pool, track, review.
+// Jump Height UI: pick a video source, watch for jumps, keep a list, review sessions.
 
-import { applyH, cornersValid, poolToImage } from './homography.js';
-import { cellIndex } from './grid.js';
-import {
-  PoolSession, formatTime, laneLabel, laneSettings, lengthMetres, sessionCSV, sessionRecord,
-  strokeName, swimmerLabel,
-} from './session.js';
-import { STROKES } from './strokes.js';
 import { VideoSource, cameraSupported, keepAwake } from './capture.js';
-import { deleteSession, download, loadSessions, loadSetup, saveSession, saveSetup } from './store.js';
+import { JumpDetector } from './jump.js';
+import {
+  deleteSession, download, loadSessions, loadUnit, newSessionId, saveSession, saveUnit, sessionCSV,
+} from './store.js';
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({
   '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
 }[c]));
-const fmt = (v, d = 0) => (Number.isFinite(v) ? v.toFixed(d) : '–');
 
 const homeEl = $('#home');
-const workEl = $('#work');
+const liveEl = $('#live');
 const panel = $('#panel');
 const stage = $('#stage');
 const video = $('#video');
 const overlay = $('#overlay');
+const loadingEl = $('#loading');
 const ctx = overlay.getContext('2d');
 
-// Distinct marker colours for swimmers (lane order), readable on water.
-const COLORS = ['#ffcf33', '#ff6b6b', '#7cf29c', '#ff9f1c', '#c77dff', '#4cc9f0', '#f72585', '#b8f2e6', '#ffd6a5', '#9bf6ff'];
-const CORNER_NAMES = [
-  'Start wall, first-lane side',
-  'Start wall, last-lane side',
-  'Turn wall, last-lane side',
-  'Turn wall, first-lane side',
-];
+const STATUS_TEXT = {
+  'no-person': 'Step into view. Whole body and feet.',
+  settling: 'Stand still…',
+  ready: 'Ready. Jump!',
+  airborne: 'In the air…',
+};
+const FEET = new Set([27, 28, 29, 30, 31, 32]);
+const SPEEDS = [1, 2, 4]; // 120 fps footage saved at 60 or 30 fps
+const LOW_FPS = 20;
+const TOO_SLOW_FPS = 12; // below this the detector cannot learn the ground level or time a flight
 
 const state = {
   mode: 'home',
   source: new VideoSource(video),
-  setup: loadSetup(),
-  session: null,
-  record: null,
-  drag: -1,
-  showFg: false,
-  lastUi: 0,
+  unit: loadUnit(),
+  detail: null,
+  // live session
+  fileMode: false,
+  file: null,
+  speed: 1,
+  facing: 'environment',
+  pose: null,
+  detector: null,
+  poseModule: null,
+  running: false,
+  id: null,
+  startedAt: null,
+  jumps: [], // { at, heightM, flightTime, confidence, notes }
+  status: null,
+  landmarks: null,
+  fps: null,
+  lastFrameAt: 0,
+  lastFpsUi: 0,
+  frames: 0,
   release: null,
-  cellQuads: null,
+  finished: false,
+  audio: null,
 };
 
-// ------------------------------------------------------------------- home
+// ----------------------------------------------------------------- helpers
 
-function showHome() {
-  state.mode = 'home';
-  state.source.close();
-  workEl.hidden = true;
-  homeEl.hidden = false;
-  const sessions = loadSessions();
-  homeEl.innerHTML = `
-    <section class="card">
-      <h2>Lap and stroke timing from one camera</h2>
-      <p>Point a phone or tablet at the pool. The app follows a swimmer in each lane and records
-        every length: split time, stroke rate and stroke count.</p>
-      <div class="actions">
-        <button class="btn" id="use-camera" ${cameraSupported() ? '' : 'disabled'}>Use the camera</button>
-        <label class="btn secondary file-btn">Open a video<input type="file" id="open-file" accept="video/*"></label>
-      </div>
-      ${cameraSupported() ? '' : '<p class="muted small">The camera needs a secure (https) page. You can still open a recorded video.</p>'}
-      <p class="form-error" id="home-error" role="alert" hidden></p>
-    </section>
-    <section class="card">
-      <h3>Setting up the camera</h3>
-      <ol class="steps">
-        <li><b>Up high, looking down the pool</b> from one end (a stand, balcony or tall tripod). The higher, the better swimmers stay apart.</li>
-        <li><b>Both walls in view</b> — the ends swimmers turn at — and every lane you want to time.</li>
-        <li><b>Keep it still</b> and in landscape. Plug in for long sessions.</li>
-        <li>Start tracking <b>before</b> swimmers push off: it spends 4 seconds learning the empty water.</li>
-      </ol>
-      <p class="muted small">One swimmer per lane is the most accurate. For circle swimming, set up to 4 swimmers in a lane.
-        Stroke type is read as Free/Back (arms alternate) or Fly/Breast (arms together); pick the exact stroke per lane if you like.</p>
-    </section>
-    ${sessions.length ? `<section class="card">
-      <h3>Past sessions</h3>
-      <ul class="plain history">${sessions.map((s) => `
-        <li><div><b>${esc(new Date(s.date).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }))}</b><br>
-          <span class="muted small">${s.swimmers.length} swimmer${s.swimmers.length === 1 ? '' : 's'} ·
-          ${s.swimmers.reduce((n, w) => n + w.lengths.length, 0)} lengths · ${s.length} ${esc(s.unit)} pool</span></div>
-          <button class="btn secondary small-btn" data-view="${esc(s.id)}">View</button>
-          <button class="btn secondary small-btn" data-csv="${esc(s.id)}">CSV</button>
-          <button class="btn secondary danger small-btn" data-del="${esc(s.id)}" aria-label="Delete">✕</button>
-        </li>`).join('')}</ul>
-    </section>` : ''}
-    <div id="past"></div>`;
+const heightText = (m, unit = state.unit) => (unit === 'in' ? (m * 39.3701).toFixed(1) : (m * 100).toFixed(1));
+const unitText = (unit = state.unit) => (unit === 'in' ? 'in' : 'cm');
+const when = (iso) => new Date(iso).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+const best = (jumps) => jumps.reduce((b, j) => (!b || j.heightM > b.heightM ? j : b), null);
 
-  $('#use-camera').onclick = async () => {
-    try {
-      await state.source.openCamera();
-      showSetup();
-    } catch (e) {
-      showError(e.name === 'NotAllowedError' ? 'Camera permission was refused. Allow it in the browser settings and try again.' : e.message);
-    }
-  };
-  $('#open-file').onchange = async (ev) => {
-    const file = ev.target.files[0];
-    if (!file) return;
-    try {
-      await state.source.openFile(file);
-      showSetup();
-    } catch (e) {
-      showError(e.message);
-    }
-  };
-  homeEl.querySelectorAll('[data-view]').forEach((b) => {
-    b.onclick = () => {
-      const rec = loadSessions().find((s) => s.id === b.dataset.view);
-      $('#past').innerHTML = `<section class="card"><h3>${esc(new Date(rec.date).toLocaleString())}</h3>${recordTables(rec)}</section>`;
-      $('#past').scrollIntoView({ behavior: 'smooth' });
-    };
-  });
-  homeEl.querySelectorAll('[data-csv]').forEach((b) => {
-    b.onclick = () => {
-      const rec = loadSessions().find((s) => s.id === b.dataset.csv);
-      download(`pool-session-${rec.date.slice(0, 16).replace(/[:T]/g, '-')}.csv`, sessionCSV(rec));
-    };
-  });
-  homeEl.querySelectorAll('[data-del]').forEach((b) => {
-    b.onclick = () => {
-      if (confirm('Delete this session?')) { deleteSession(b.dataset.del); showHome(); }
-    };
+function setUnit(unit) {
+  state.unit = unit;
+  saveUnit(unit);
+  if (state.mode === 'live') renderJumps();
+  if (state.mode === 'detail') showDetail(state.detail);
+}
+
+const unitToggle = () => `<div class="seg" role="group" aria-label="Units">
+  <button type="button" data-unit="cm" aria-pressed="${state.unit === 'cm'}">cm</button>
+  <button type="button" data-unit="in" aria-pressed="${state.unit === 'in'}">in</button></div>`;
+
+function bindUnitToggle(root) {
+  root.querySelectorAll('[data-unit]').forEach((b) => {
+    b.onclick = () => setUnit(b.dataset.unit);
   });
 }
 
-function showError(msg) {
+// Browsers (iOS above all) only let sound start from a tap, so the audio is
+// set up when the user starts a session, not when the first jump lands.
+function primeAudio() {
+  try {
+    state.audio ||= new (window.AudioContext || window.webkitAudioContext)();
+    if (state.audio.state === 'suspended') state.audio.resume();
+  } catch { /* no sound on this device */ }
+}
+
+function beep() {
+  try {
+    const a = state.audio;
+    if (!a) return;
+    if (a.state === 'suspended') a.resume();
+    const o = a.createOscillator();
+    const g = a.createGain();
+    o.frequency.value = 880;
+    g.gain.setValueAtTime(0.25, a.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.001, a.currentTime + 0.18);
+    o.connect(g).connect(a.destination);
+    o.start();
+    o.stop(a.currentTime + 0.2);
+  } catch { /* sound is optional */ }
+  try { navigator.vibrate?.(80); } catch { /* optional */ }
+}
+
+// -------------------------------------------------------------------- home
+
+function showHome(message = '') {
+  state.mode = 'home';
+  document.body.classList.remove('is-live');
+  liveEl.hidden = true;
+  homeEl.hidden = false;
+  window.scrollTo(0, 0);
+  const sessions = loadSessions();
+  const camOk = cameraSupported();
+  homeEl.innerHTML = `
+    <section class="card">
+      <h2>Measure your vertical jump</h2>
+      <p>Prop up your phone, jump, and the app estimates how high you went from how long you were in the air.</p>
+      <div class="actions">
+        <button class="btn" id="use-camera" ${camOk ? '' : 'disabled'}>Start camera</button>
+        <label class="btn secondary file-btn">Use a video<input type="file" id="open-file" accept="video/*"></label>
+      </div>
+      ${camOk ? '' : '<p class="muted small" style="margin-top:10px">The camera needs a secure page (https). You can still use a recorded video.</p>'}
+      <p class="form-error" id="home-error" role="alert" ${message ? '' : 'hidden'}>${esc(message)}</p>
+      <p class="muted small">Slow-motion clips are more accurate. If your phone saves slow motion as a slowed-down file, you can tell the app how much it was slowed.</p>
+    </section>
+    <section class="card">
+      <h3>Setting up</h3>
+      <ol class="steps">
+        <li>Prop the phone so it stays still.</li>
+        <li>Keep your whole body in view, feet included, about 2 to 4 m away.</li>
+        <li>Stand still until it says ready.</li>
+        <li>Jump and land on the same spot, with your legs as straight as they were at takeoff.</li>
+      </ol>
+    </section>
+    ${sessions.length ? `<section class="card">
+      <h3>Recent sessions</h3>
+      <ul class="plain history">${sessions.slice(0, 10).map((s) => {
+    const b = best(s.jumps);
+    return `<li><div><b>${esc(when(s.startedAt))}</b><br>
+        <span class="muted small">${s.jumps.length} jump${s.jumps.length === 1 ? '' : 's'}${b ? ` · best ${heightText(b.heightM)} ${unitText()}` : ''}</span></div>
+        <button class="btn secondary small-btn" data-view="${esc(s.id)}">View</button></li>`;
+  }).join('')}</ul>
+    </section>` : ''}`;
+
+  $('#use-camera').onclick = () => startCamera('environment');
+  $('#open-file').onchange = (ev) => {
+    const file = ev.target.files[0];
+    ev.target.value = '';
+    if (file) startFile(file);
+  };
+  homeEl.querySelectorAll('[data-view]').forEach((b) => {
+    b.onclick = () => showDetail(b.dataset.view);
+  });
+}
+
+function homeError(msg) {
   const el = $('#home-error');
+  if (!el) { showHome(msg); return; }
   el.textContent = msg;
   el.hidden = false;
 }
 
-// ------------------------------------------------------------------ stage
+function cameraMessage(e) {
+  if (e?.name === 'NotAllowedError' || e?.name === 'SecurityError') {
+    return 'The camera is blocked. Allow camera access in your browser settings, then try again.';
+  }
+  if (e?.name === 'NotFoundError' || e?.name === 'OverconstrainedError') return 'No camera was found on this device.';
+  if (e?.name === 'NotReadableError') return 'The camera is in use by another app. Close it and try again.';
+  return e?.message || 'The camera could not be started.';
+}
 
-function openWorkspace() {
-  homeEl.hidden = true;
-  workEl.hidden = false;
-  const { width, height } = state.source.size;
-  const aspect = width / height;
-  stage.style.aspectRatio = `${width} / ${height}`;
-  stage.style.width = `min(100%, calc(72vh * ${aspect.toFixed(4)}))`;
+// ----------------------------------------------------------------- session detail
+
+function showDetail(id) {
+  const rec = loadSessions().find((s) => s.id === id);
+  if (!rec) { showHome(); return; }
+  state.mode = 'detail';
+  state.detail = id;
+  const b = best(rec.jumps);
+  const avg = rec.jumps.reduce((n, j) => n + j.heightM, 0) / (rec.jumps.length || 1);
+  homeEl.innerHTML = `
+    <section class="card">
+      <h2>${esc(when(rec.startedAt))}</h2>
+      <div class="bar">${unitToggle()}</div>
+      <div class="stats">
+        <div><b>${rec.jumps.length}</b><span>jumps</span></div>
+        <div><b>${b ? heightText(b.heightM) : '–'}</b><span>best (${unitText()})</span></div>
+        <div><b>${rec.jumps.length ? heightText(avg) : '–'}</b><span>average (${unitText()})</span></div>
+      </div>
+      <ul class="jumps">${rec.jumps.map((j, i) => `<li class="${j === b ? 'best' : ''}">
+        <div><b>${heightText(j.heightM)} ${unitText()}</b>${j === b ? '<span class="badge">Best</span>' : ''}<br>
+        <span class="muted small">#${i + 1} · ${Math.round(j.flightTime * 1000)} ms · ${esc(j.confidence)} confidence</span></div></li>`).join('')}</ul>
+      <div class="actions">
+        <button class="btn" id="d-csv">Export CSV</button>
+        <button class="btn secondary" id="d-back">Back</button>
+        <button class="btn secondary danger" id="d-del">Delete session</button>
+      </div>
+    </section>`;
+  bindUnitToggle(homeEl);
+  $('#d-back').onclick = () => showHome();
+  $('#d-csv').onclick = () => download(`jump-height-${rec.startedAt.slice(0, 16).replace(/[:T]/g, '-')}.csv`, sessionCSV(rec));
+  $('#d-del').onclick = () => {
+    if (confirm('Delete this session?')) { deleteSession(rec.id); showHome(); }
+  };
+  window.scrollTo(0, 0);
+}
+
+// -------------------------------------------------------------------- live
+
+async function startCamera(facing) {
+  if (state.opening) return; // a second tap while the permission prompt is up
+  state.opening = true;
+  primeAudio();
+  state.fileMode = false;
+  state.file = null;
+  state.facing = facing;
+  try {
+    const info = await state.source.openCamera({ facing });
+    state.opening = false;
+    await enterLive(info);
+  } catch (e) {
+    state.source.close();
+    homeError(cameraMessage(e));
+  } finally {
+    state.opening = false;
+  }
+}
+
+async function startFile(file) {
+  if (state.opening) return;
+  state.opening = true;
+  state.fileMode = true;
+  state.file = file;
+  state.speed = 1;
+  try {
+    const info = await state.source.openFile(file);
+    state.opening = false;
+    await enterLive(info);
+  } catch (e) {
+    state.source.close();
+    homeError(e.message || 'That video could not be opened.');
+  } finally {
+    state.opening = false;
+  }
+}
+
+function sizeStage(info) {
+  const aspect = info?.aspect || state.aspect || 16 / 9;
+  state.aspect = aspect;
+  liveEl.style.setProperty('--aspect', aspect.toFixed(4));
+  stage.classList.toggle('mirror', !state.fileMode && state.facing === 'user');
   sizeOverlay();
 }
 
 function sizeOverlay() {
   const dpr = window.devicePixelRatio || 1;
-  overlay.width = Math.round(stage.clientWidth * dpr);
-  overlay.height = Math.round(stage.clientHeight * dpr);
-  draw();
+  overlay.width = Math.max(1, Math.round(stage.clientWidth * dpr));
+  overlay.height = Math.max(1, Math.round(stage.clientHeight * dpr));
+  drawPose();
 }
 new ResizeObserver(sizeOverlay).observe(stage);
 
-// Pool → overlay pixels.
-function mapper(H) {
-  return (x, y) => {
-    const [u, v] = applyH(H, x, y);
-    return [u * overlay.width, v * overlay.height];
-  };
+function resetRun() {
+  state.jumps = [];
+  state.status = null;
+  state.landmarks = null;
+  state.fps = null;
+  state.lastFrameAt = 0;
+  state.frames = 0;
+  state.finished = false;
+  state.id = newSessionId();
+  state.startedAt = new Date().toISOString();
+  state.detector = new JumpDetector();
 }
 
-function currentH() {
-  const { setup } = state;
-  if (state.session) return state.session.H;
-  if (!cornersValid(setup.corners)) return null;
-  try { return poolToImage(setup.corners, setup.lanes, lengthMetres(setup)); } catch { return null; }
-}
-
-function draw(snap) {
-  ctx.clearRect(0, 0, overlay.width, overlay.height);
-  const { setup } = state;
-  const dpr = window.devicePixelRatio || 1;
-  const H = currentH();
-  const editing = state.mode === 'setup';
-  if (H) {
-    const P = mapper(H);
-    const L = lengthMetres(setup);
-    ctx.lineWidth = 1.5 * dpr;
-    // Lane lines.
-    for (let k = 0; k <= setup.lanes; k++) {
-      const edge = k === 0 || k === setup.lanes;
-      ctx.strokeStyle = edge ? 'rgba(255,207,51,.9)' : `rgba(255,255,255,${editing ? 0.75 : 0.35})`;
-      line(P(k, 0), P(k, L));
-    }
-    // Walls and distance marks every 5 m.
-    ctx.strokeStyle = 'rgba(255,207,51,.9)';
-    line(P(0, 0), P(setup.lanes, 0));
-    line(P(0, L), P(setup.lanes, L));
-    ctx.strokeStyle = `rgba(255,255,255,${editing ? 0.5 : 0.2})`;
-    ctx.setLineDash([4 * dpr, 4 * dpr]);
-    for (let d = 5; d < L - 0.5; d += 5) line(P(0, d), P(setup.lanes, d));
-    ctx.setLineDash([]);
-    // Lane numbers along the start wall.
-    ctx.font = `600 ${12 * dpr}px system-ui, sans-serif`;
-    ctx.textAlign = 'center';
-    for (let k = 0; k < setup.lanes; k++) {
-      const on = laneSettings(setup, k).track;
-      const [x, y] = P(k + 0.5, Math.min(1.2, L * 0.05));
-      ctx.fillStyle = on ? 'rgba(255,255,255,.95)' : 'rgba(255,255,255,.35)';
-      ctx.fillText(String(setup.firstLane + k), x, y);
-    }
-    if (state.showFg && state.session?.fg) drawForeground();
-    if (snap) drawSwimmers(P, snap);
+async function enterLive(info) {
+  state.mode = 'live';
+  document.body.classList.add('is-live');
+  homeEl.hidden = true;
+  liveEl.hidden = false;
+  window.scrollTo(0, 0);
+  resetRun();
+  buildPanel();
+  sizeStage(info);
+  if (!state.fileMode) {
+    const release = await keepAwake();
+    if (state.mode !== 'live') { release(); return; } // Done was tapped meanwhile
+    state.release = release;
   }
-  if (editing) drawHandles();
+  await ensurePose();
+  if (state.mode !== 'live') return;
+  if (state.pose && !state.fileMode) beginRun();
+  else if (state.pose) updateFileControls();
 }
 
-function line([x0, y0], [x1, y1]) {
-  ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x1, y1); ctx.stroke();
-}
-
-function drawHandles() {
-  const dpr = window.devicePixelRatio || 1;
-  state.setup.corners.forEach(([u, v], i) => {
-    const x = u * overlay.width, y = v * overlay.height;
-    ctx.fillStyle = '#ffcf33';
-    ctx.strokeStyle = '#111';
-    ctx.lineWidth = 2 * dpr;
-    ctx.beginPath(); ctx.arc(x, y, 13 * dpr, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
-    ctx.fillStyle = '#111';
-    ctx.font = `700 ${13 * dpr}px system-ui, sans-serif`;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(String(i + 1), x, y + 0.5);
-    ctx.textBaseline = 'alphabetic';
-  });
-}
-
-// Cells the tracker currently sees as "not water" (for checking the setup).
-function drawForeground() {
-  const s = state.session;
-  const g = s.geom;
-  if (!state.cellQuads) {
-    const P = mapper(s.H);
-    const q = new Float32Array(g.nCells * 8);
-    for (let lane = 0; lane < g.lanes; lane++) {
-      for (let j = 0; j < g.across; j++) {
-        for (let i = 0; i < g.nx; i++) {
-          const c = cellIndex(g, lane, j, i);
-          const x0 = lane + j / g.across, x1 = lane + (j + 1) / g.across;
-          const y0 = i * g.cellLen, y1 = (i + 1) * g.cellLen;
-          [P(x0, y0), P(x1, y0), P(x1, y1), P(x0, y1)].forEach(([a, b], k) => { q[c * 8 + k * 2] = a; q[c * 8 + k * 2 + 1] = b; });
-        }
-      }
-    }
-    state.cellQuads = q;
-  }
-  const q = state.cellQuads;
-  const fg = s.fg;
-  for (let c = 0; c < g.nCells; c++) {
-    if (fg[c] <= 0) continue;
-    ctx.fillStyle = `rgba(255,60,120,${Math.min(0.8, 0.2 + fg[c] * 0.2)})`;
-    ctx.beginPath();
-    ctx.moveTo(q[c * 8], q[c * 8 + 1]);
-    for (let k = 1; k < 4; k++) ctx.lineTo(q[c * 8 + k * 2], q[c * 8 + k * 2 + 1]);
-    ctx.fill();
-  }
-}
-
-function drawSwimmers(P, snap) {
-  const dpr = window.devicePixelRatio || 1;
-  const { setup } = state;
-  for (const ln of snap.lanes) {
-    if (!ln) continue;
-    for (const tr of ln.tracks) {
-      const [x, y] = P(ln.lane + 0.5 + tr.y, tr.x);
-      const color = COLORS[(ln.lane + tr.slot * 3) % COLORS.length];
-      ctx.strokeStyle = color;
-      ctx.fillStyle = color;
-      ctx.lineWidth = 3 * dpr;
-      ctx.setLineDash(tr.hidden ? [4 * dpr, 4 * dpr] : []);
-      ctx.beginPath(); ctx.arc(x, y, 11 * dpr, 0, Math.PI * 2); ctx.stroke();
-      ctx.setLineDash([]);
-      // Arrow for direction of travel.
-      if (Math.abs(tr.v) > 0.3) {
-        const [ax, ay] = P(ln.lane + 0.5 + tr.y, tr.x + Math.sign(tr.v) * 2);
-        line([x, y], [ax, ay]);
-      }
-      const name = swimmerLabel(setup, ln.lane, tr.slot, ln.swimmers.length);
-      ctx.font = `600 ${12 * dpr}px system-ui, sans-serif`;
-      ctx.textAlign = 'left';
-      ctx.lineWidth = 3 * dpr;
-      ctx.strokeStyle = 'rgba(0,0,0,.7)';
-      ctx.strokeText(name, x + 14 * dpr, y + 4 * dpr);
-      ctx.fillText(name, x + 14 * dpr, y + 4 * dpr);
-    }
-  }
-}
-
-// Corner dragging.
-function pointerPos(ev) {
-  const r = overlay.getBoundingClientRect();
-  return [(ev.clientX - r.left) / r.width, (ev.clientY - r.top) / r.height];
-}
-overlay.addEventListener('pointerdown', (ev) => {
-  if (state.mode !== 'setup') return;
-  const [u, v] = pointerPos(ev);
-  const r = overlay.getBoundingClientRect();
-  let best = -1, bestD = 40; // px
-  state.setup.corners.forEach(([cu, cv], i) => {
-    const d = Math.hypot((cu - u) * r.width, (cv - v) * r.height);
-    if (d < bestD) { best = i; bestD = d; }
-  });
-  if (best < 0) return;
-  state.drag = best;
-  overlay.setPointerCapture(ev.pointerId);
-  ev.preventDefault();
-});
-overlay.addEventListener('pointermove', (ev) => {
-  if (state.drag < 0) return;
-  const [u, v] = pointerPos(ev);
-  state.setup.corners[state.drag] = [Math.min(1, Math.max(0, u)), Math.min(1, Math.max(0, v))];
-  draw();
-});
-const endDrag = () => {
-  if (state.drag < 0) return;
-  state.drag = -1;
-  saveSetup(state.setup);
-  checkCorners();
-};
-overlay.addEventListener('pointerup', endDrag);
-overlay.addEventListener('pointercancel', endDrag);
-
-// ------------------------------------------------------------------ setup
-
-function showSetup() {
-  state.mode = 'setup';
-  state.session = null;
-  state.cellQuads = null;
-  openWorkspace();
-  overlay.classList.add('editing');
-  const { setup } = state;
-  panel.innerHTML = `
-    <section class="card">
-      <h2>Line up the pool</h2>
-      <p>Drag the dots onto the corners of the water you want to watch, where the outer lane ropes
-        (or pool edges) meet the walls:</p>
-      <ol class="corner-key">${CORNER_NAMES.map((n, i) => `<li><span class="corner-dot">${i + 1}</span>${n}</li>`).join('')}</ol>
-      <p class="muted small">Check that the drawn lane lines sit on the lane ropes all the way down.</p>
-      <div class="row">
-        <label class="field">Pool length <input id="len" type="number" min="10" max="100" step="any" value="${setup.length}"></label>
-        <label class="field">Unit <select id="unit"><option value="m">metres</option><option value="yd" ${setup.unit === 'yd' ? 'selected' : ''}>yards</option></select></label>
-      </div>
-      <div class="row">
-        <label class="field">Lanes in view <input id="lanes" type="number" min="1" max="10" value="${setup.lanes}"></label>
-        <label class="field">First lane number <input id="first" type="number" min="0" max="20" value="${setup.firstLane}"></label>
-      </div>
-      <div class="lane-row lane-head"><span>Watch</span><span>Name</span><span>Stroke</span><span>Swimmers</span></div>
-      <div class="lane-rows" id="lane-rows"></div>
-      <p class="form-error" id="setup-error" role="alert" hidden></p>
-      <div class="actions">
-        <button class="btn" id="start">Start tracking</button>
-        <button class="btn secondary" id="back">Back</button>
-      </div>
-    </section>`;
-  renderLaneRows();
-  const num = (id, lo, hi, fallback) => {
-    const v = Number($(id).value);
-    return Number.isFinite(v) && v >= lo && v <= hi ? v : fallback;
-  };
-  const onChange = () => {
-    setup.length = num('#len', 10, 100, setup.length);
-    setup.unit = $('#unit').value;
-    const lanes = Math.round(num('#lanes', 1, 10, setup.lanes));
-    const first = Math.round(num('#first', 0, 20, setup.firstLane));
-    const redo = lanes !== setup.lanes || first !== setup.firstLane;
-    setup.lanes = lanes;
-    setup.firstLane = first;
-    if (redo) renderLaneRows();
-    saveSetup(setup);
-    draw();
-  };
-  ['#len', '#unit', '#lanes', '#first'].forEach((id) => $(id).addEventListener('change', onChange));
-  $('#back').onclick = showHome;
-  $('#start').onclick = startTracking;
-  checkCorners();
-}
-
-function renderLaneRows() {
-  const { setup } = state;
-  const rows = $('#lane-rows');
-  rows.innerHTML = Array.from({ length: setup.lanes }, (_, i) => {
-    const s = laneSettings(setup, i);
-    return `<div class="lane-row ${s.track ? '' : 'off'}" data-lane="${i}">
-      <label class="watch"><input type="checkbox" data-k="track" ${s.track ? 'checked' : ''}>${setup.firstLane + i}</label>
-      <input type="text" data-k="name" maxlength="40" placeholder="Lane ${setup.firstLane + i}" value="${esc(s.name)}" aria-label="Swimmer name, lane ${setup.firstLane + i}">
-      <select data-k="stroke" aria-label="Stroke">${Object.entries(STROKES).map(([k, v]) => `<option value="${k}" ${k === s.stroke ? 'selected' : ''}>${v.label}</option>`).join('')}</select>
-      <select data-k="swimmers" aria-label="Swimmers in lane">${[1, 2, 3, 4].map((n) => `<option ${n === s.swimmers ? 'selected' : ''}>${n}</option>`).join('')}</select>
-    </div>`;
-  }).join('');
-  rows.querySelectorAll('.lane-row').forEach((row) => {
-    const i = Number(row.dataset.lane);
-    row.addEventListener('change', (ev) => {
-      const k = ev.target.dataset.k;
-      const cur = { ...(setup.lane[i] || {}) };
-      cur[k] = k === 'track' ? ev.target.checked : k === 'swimmers' ? Number(ev.target.value) : ev.target.value.trim();
-      setup.lane[i] = cur;
-      row.classList.toggle('off', !laneSettings(setup, i).track);
-      saveSetup(setup);
-      draw();
-    });
-  });
-}
-
-function checkCorners() {
-  const err = $('#setup-error');
-  if (!err) return true;
-  const ok = cornersValid(state.setup.corners);
-  err.textContent = ok ? '' : 'The corners are crossed over. Put them in order: 1 and 2 on the start wall, 3 and 4 on the turn wall.';
-  err.hidden = ok;
-  return ok;
-}
-
-// ---------------------------------------------------------------- tracking
-
-async function startTracking() {
-  const { setup, source } = state;
-  if (!checkCorners()) return;
-  if (![...Array(setup.lanes).keys()].some((i) => laneSettings(setup, i).track)) {
-    const err = $('#setup-error');
-    err.textContent = 'Tick at least one lane to watch.';
-    err.hidden = false;
-    return;
-  }
-  saveSetup(setup);
-  const { width, height } = source.size;
+async function ensurePose() {
+  if (state.pose) return;
+  loadingEl.hidden = false;
+  setError('');
   try {
-    state.session = new PoolSession(setup, width, height);
+    state.poseModule ||= await import('./pose.js');
+    state.pose = await state.poseModule.createPoseTracker();
   } catch (e) {
-    const err = $('#setup-error');
-    err.textContent = e.message;
-    err.hidden = false;
+    setError(`The pose model could not be loaded. ${e?.message || ''} Check your connection and try again.`, true);
+  } finally {
+    loadingEl.hidden = true;
+  }
+}
+
+function beginRun() {
+  state.running = true;
+  state.finished = false;
+  state.lastFrameAt = 0;
+  state.detector.reset();
+  setError('');
+  state.source.start(onFrame);
+  setStatus(null);
+  updateFileControls();
+}
+
+function onFrame(v, t) {
+  const now = performance.now();
+  if (state.lastFrameAt) {
+    const inst = 1000 / Math.max(1, now - state.lastFrameAt);
+    state.fps = state.fps == null ? inst : state.fps * 0.9 + inst * 0.1;
+  }
+  state.lastFrameAt = now;
+  state.frames += 1;
+  try {
+    const { landmarks, sample } = state.pose.detect(v, t);
+    state.landmarks = landmarks;
+    // The detector works in real-world time; slow-motion files are scaled back.
+    const rt = state.fileMode ? t / state.speed : t;
+    const { status, jump } = state.detector.push({ ...sample, t: rt });
+    drawPose();
+    setStatus(status);
+    if (jump) addJump(jump);
+  } catch (e) {
+    state.source.stop();
+    state.running = false;
+    setError(`Something went wrong while tracking. ${e?.message || ''}`, true);
     return;
   }
-  state.mode = 'track';
-  state.cellQuads = null;
-  overlay.classList.remove('editing');
-  renderTrackPanel();
-  if (!source.live) video.currentTime = 0;
-  state.release = await keepAwake();
-  source.start((rgba, t) => {
-    // A file that was rewound starts a fresh session.
-    if (state.session.t !== null && t < state.session.t - 0.5) {
-      state.session = new PoolSession(setup, width, height);
-      renderTrackPanel();
-    }
-    state.session.process(rgba, t);
-    const now = performance.now();
-    const snap = state.session.snapshot();
-    draw(snap);
-    if (now - state.lastUi > 250) {
-      state.lastUi = now;
-      updateTrackPanel(snap);
-    }
-    if (source.ended) finishTracking();
-  });
-  video.onended = () => { if (state.mode === 'track') finishTracking(); };
+  if (now - state.lastFpsUi > 500) { state.lastFpsUi = now; renderFps(); }
 }
 
-function renderTrackPanel() {
-  const { setup, session } = state;
+function addJump(j) {
+  state.jumps.push({
+    at: Date.now(), heightM: j.heightM, flightTime: j.flightTime, confidence: j.confidence, notes: j.notes || [],
+  });
+  state.latest = state.jumps[state.jumps.length - 1];
+  persist();
+  renderJumps();
+  beep();
+}
+
+function persist() {
+  saveSession({
+    id: state.id,
+    startedAt: state.startedAt,
+    jumps: state.jumps.map(({ at, heightM, flightTime, confidence }) => ({ at, heightM, flightTime, confidence })),
+  });
+}
+
+function deleteJump(i) {
+  const [gone] = state.jumps.splice(i, 1);
+  if (state.latest === gone) state.latest = state.jumps[state.jumps.length - 1] || null;
+  persist();
+  renderJumps();
+}
+
+// ----------------------------------------------------------- live rendering
+
+function buildPanel() {
+  state.latest = null;
   panel.innerHTML = `
-    <section class="card">
-      <div class="status-line"><span id="status">Starting…</span><span class="clock" id="clock"></span></div>
-      <div class="meter" id="learn-meter"><div></div></div>
-      <div class="actions">
-        <button class="btn" id="clock-btn">Start race clock</button>
-        <button class="btn secondary" id="finish">Finish</button>
-      </div>
-      <label class="small" style="display:flex;gap:8px;align-items:center;margin-top:10px">
-        <input type="checkbox" id="show-fg" ${state.showFg ? 'checked' : ''}> Show what the tracker sees</label>
+    <div class="status" id="status" role="status" aria-live="polite">Getting ready…</div>
+    <p class="form-error" id="live-error" role="alert" hidden></p>
+    <section class="card result-card" id="result-card"></section>
+    <p class="notice small" id="fps-warn" hidden>The phone is processing few frames per second, so results will be less precise.</p>
+    <section class="card" id="file-card" ${state.fileMode ? '' : 'hidden'}>
+      <label class="field">Recorded in slow motion
+        <select id="speed">${SPEEDS.map((s) => `<option value="${s}">${s === 1 ? 'No, normal speed' : `${s}× slower`}</option>`).join('')}</select>
+      </label>
+      <p class="muted small">Choose this before the video is processed. Changing it later restarts the video.</p>
+      <div class="actions"><button class="btn" id="file-go" disabled>Start</button></div>
     </section>
-    ${session.lanes.map((lt, i) => (lt ? `
-      <section class="card lane-card">
-        <h3><span class="swatch" style="background:${COLORS[i % COLORS.length]}"></span>${esc(laneLabel(setup, i))}
-          <select data-stroke="${i}" aria-label="Stroke">${Object.entries(STROKES).map(([k, v]) => `<option value="${k}" ${k === lt.stroke ? 'selected' : ''}>${v.label}</option>`).join('')}</select></h3>
-        <div id="lane-${i}"><p class="muted small">Waiting for a swimmer…</p></div>
-      </section>` : '')).join('')}`;
-  $('#clock-btn').onclick = () => {
-    state.session.startClock();
-    $('#clock-btn').textContent = 'Restart race clock';
-  };
-  $('#finish').onclick = finishTracking;
-  $('#show-fg').onchange = (ev) => { state.showFg = ev.target.checked; };
-  panel.querySelectorAll('[data-stroke]').forEach((sel) => {
-    sel.onchange = () => {
-      const i = Number(sel.dataset.stroke);
-      state.session.setStroke(i, sel.value);
-      setup.lane[i] = { ...(setup.lane[i] || {}), stroke: sel.value };
-      saveSetup(setup);
+    <section class="card">
+      <div class="bar"><h3 style="margin:0">This session</h3>${unitToggle()}</div>
+      <ul class="jumps" id="jumps"></ul>
+      <p class="fps" id="fps"></p>
+    </section>
+    <div class="bar">
+      ${state.fileMode ? '' : '<button class="btn secondary" id="flip">Flip camera</button>'}
+      <button class="btn" id="done">Done</button>
+    </div>`;
+  bindUnitToggle(panel);
+  $('#done').onclick = finish;
+  const flip = $('#flip');
+  if (flip) flip.onclick = flipCamera;
+  if (state.fileMode) {
+    $('#speed').onchange = (ev) => changeSpeed(Number(ev.target.value));
+    $('#file-go').onclick = runFile;
+  }
+  renderJumps();
+  renderFps();
+}
+
+function setStatus(status) {
+  if (status === state.status) return;
+  state.status = status;
+  const el = $('#status');
+  if (!el) return;
+  el.className = `status ${status || ''}`;
+  el.textContent = status ? STATUS_TEXT[status] || status : (state.running ? STATUS_TEXT['no-person'] : 'Getting ready…');
+}
+
+function setError(msg, retry = false) {
+  const el = $('#live-error');
+  if (!el) return;
+  el.hidden = !msg;
+  el.innerHTML = msg ? `${esc(msg)} ${retry ? '<button class="btn secondary small-btn" id="retry">Try again</button>' : ''}` : '';
+  const r = $('#retry');
+  if (r) {
+    r.onclick = async () => {
+      setError('');
+      await ensurePose();
+      if (!state.pose) return;
+      if (state.fileMode) { await restartFile(); } else beginRun();
     };
+  }
+}
+
+function renderJumps() {
+  const list = $('#jumps');
+  const card = $('#result-card');
+  if (!list || !card) return;
+  const b = best(state.jumps);
+  const l = state.latest;
+  const conf = l ? l.confidence : '';
+  card.innerHTML = l ? `
+    <div class="result" aria-label="Latest jump">${heightText(l.heightM)}<small>${unitText()}</small></div>
+    <div class="result-meta">${Math.round(l.flightTime * 1000)} ms in the air ·
+      <span class="conf ${esc(conf)}">${esc(conf)} confidence</span></div>
+    ${conf !== 'high' && l.notes.length ? `<ul class="notes">${l.notes.map((n) => `<li>${esc(n)}</li>`).join('')}</ul>` : ''}`
+    : `<div class="result" aria-label="No jump yet">–<small>${unitText()}</small></div>
+    <div class="result-meta">${state.jumps.length ? 'Latest jump deleted' : 'No jump yet'}</div>`;
+  list.innerHTML = state.jumps.length ? state.jumps.map((j, i) => `
+    <li class="${j === b ? 'best' : ''}">
+      <div><b>${heightText(j.heightM)} ${unitText()}</b>${j === b ? '<span class="badge">Best</span>' : ''}<br>
+        <span class="muted small">#${i + 1} · ${Math.round(j.flightTime * 1000)} ms · ${esc(j.confidence)}</span></div>
+      <button class="icon-btn" data-del="${i}" aria-label="Delete jump ${i + 1}">✕</button>
+    </li>`).reverse().join('') : '<li class="muted">Jumps you make will appear here.</li>';
+  list.querySelectorAll('[data-del]').forEach((btn) => {
+    btn.onclick = () => deleteJump(Number(btn.dataset.del));
+  });
+  panel.querySelectorAll('[data-unit]').forEach((x) => x.setAttribute('aria-pressed', String(x.dataset.unit === state.unit)));
+}
+
+function renderFps() {
+  const el = $('#fps');
+  const warn = $('#fps-warn');
+  if (!el) return;
+  el.textContent = state.fps ? `Processing ${state.fps.toFixed(0)} frames per second` : '';
+  // Only the live camera is affected: a file is processed frame by frame at its own pace.
+  if (warn) {
+    warn.hidden = state.fileMode || !state.fps || state.frames < 15 || state.fps >= LOW_FPS;
+    warn.textContent = state.fps < TOO_SLOW_FPS
+      ? 'This device is processing too few frames per second to time a jump live. Record a video of the jump and use "Use a video" instead.'
+      : 'The phone is processing few frames per second, so results will be less precise.';
+  }
+}
+
+function updateFileControls() {
+  if (!state.fileMode) return;
+  const go = $('#file-go');
+  if (!go) return;
+  go.disabled = !state.pose || state.running;
+  go.textContent = state.finished ? 'Run again' : 'Start';
+  $('#speed').value = String(state.speed);
+}
+
+async function runFile() {
+  primeAudio();
+  if (state.finished || state.frames) await restartFile(); else beginRun();
+}
+
+async function restartFile() {
+  state.source.stop();
+  state.running = false;
+  try {
+    await state.source.openFile(state.file);
+  } catch (e) {
+    setError(e.message || 'That video could not be opened.');
+    return;
+  }
+  // A re-run replaces the previous run's saved session; it must not leave a
+  // duplicate, or a reading taken at the wrong slow-motion speed, in history.
+  deleteSession(state.id);
+  resetRun();
+  renderJumps();
+  setStatus(null);
+  beginRun();
+}
+
+async function changeSpeed(speed) {
+  state.speed = speed;
+  // Re-run from the start if the video has already been processed.
+  if (state.frames && state.pose) await restartFile();
+  else updateFileControls();
+}
+
+async function flipCamera() {
+  const next = state.facing === 'environment' ? 'user' : 'environment';
+  const btn = $('#flip');
+  btn.disabled = true;
+  try {
+    state.source.stop();
+    const info = await state.source.openCamera({ facing: next });
+    state.facing = next;
+    state.detector.reset();
+    state.landmarks = null;
+    sizeStage(info);
+    setStatus(null);
+    state.lastFrameAt = 0;
+    state.fps = null;
+    // If the model is still loading, enterLive starts the frames when it is ready.
+    if (state.pose) { state.source.start(onFrame); state.running = true; }
+  } catch (e) {
+    if (e?.name === 'SupersededError' || state.mode !== 'live') return; // Done was tapped mid-flip
+    setError(cameraMessage(e));
+    try {
+      await state.source.openCamera({ facing: state.facing });
+      if (state.pose) { state.source.start(onFrame); state.running = true; }
+    } catch { /* leave the error showing */ }
+  }
+  btn.disabled = false;
+}
+
+function videoFinished() {
+  if (state.mode !== 'live' || !state.fileMode || !state.running) return;
+  state.running = false;
+  state.finished = true;
+  state.source.stop();
+  // A jump that landed in the clip's last moments is still waiting to be scored.
+  const last = state.detector.flush();
+  if (last) addJump(last);
+  const n = state.jumps.length;
+  const el = $('#status');
+  el.className = 'status';
+  el.textContent = n ? `Video finished. ${n} jump${n === 1 ? '' : 's'} found.` : 'Video finished. No jump found.';
+  state.status = 'finished';
+  if (!n) {
+    $('#result-card').insertAdjacentHTML('beforeend', `<ul class="notes">
+      <li>Keep the whole body, feet included, in view.</li>
+      <li>Start with a second or two of standing still.</li>
+      <li>If this was a slow-motion clip, set the slow-motion speed and run it again.</li></ul>`);
+  }
+  updateFileControls();
+}
+video.addEventListener('ended', videoFinished);
+
+// ---------------------------------------------------------------- drawing
+
+function drawPose() {
+  ctx.clearRect(0, 0, overlay.width, overlay.height);
+  const lm = state.landmarks;
+  const mod = state.poseModule;
+  if (!lm || !mod) return;
+  const W = overlay.width;
+  const H = overlay.height;
+  const dpr = window.devicePixelRatio || 1;
+  const ok = (p) => p && (p.visibility ?? 1) > 0.4;
+  ctx.lineCap = 'round';
+  for (const [i, j] of mod.POSE_CONNECTIONS || []) {
+    const a = lm[i];
+    const b = lm[j];
+    if (!ok(a) || !ok(b)) continue;
+    const foot = FEET.has(i) && FEET.has(j);
+    ctx.strokeStyle = foot ? '#ffcf33' : 'rgba(255,255,255,.85)';
+    ctx.lineWidth = (foot ? 5 : 3) * dpr;
+    ctx.beginPath();
+    ctx.moveTo(a.x * W, a.y * H);
+    ctx.lineTo(b.x * W, b.y * H);
+    ctx.stroke();
+  }
+  lm.forEach((p, i) => {
+    if (!ok(p) || i < 11) return;
+    const foot = FEET.has(i);
+    ctx.fillStyle = foot ? '#ffcf33' : '#4cc9f0';
+    ctx.beginPath();
+    ctx.arc(p.x * W, p.y * H, (foot ? 7 : 4) * dpr, 0, Math.PI * 2);
+    ctx.fill();
+    if (foot) { ctx.strokeStyle = '#111'; ctx.lineWidth = 1.5 * dpr; ctx.stroke(); }
   });
 }
 
-function updateTrackPanel(snap) {
-  const status = $('#status');
-  if (!status) return;
-  const meter = $('#learn-meter');
-  if (snap.learning !== null) {
-    status.textContent = 'Learning the empty water…';
-    meter.hidden = false;
-    meter.firstElementChild.style.width = `${Math.round(snap.learning * 100)}%`;
-  } else {
-    const n = snap.lanes.reduce((k, l) => k + (l ? l.tracks.length : 0), 0);
-    status.textContent = `Tracking · ${n} swimmer${n === 1 ? '' : 's'} in view`;
-    meter.hidden = true;
-  }
-  $('#clock').textContent = snap.clock !== null ? formatTime(snap.clock) : '';
-  const { setup } = state;
-  for (const ln of snap.lanes) {
-    if (!ln) continue;
-    const el = $(`#lane-${ln.lane}`);
-    if (!el || !ln.swimmers.length) continue;
-    el.innerHTML = ln.swimmers.map((sw) => {
-      const last = sw.lengths[sw.lengths.length - 1];
-      return `<div class="swimmer">
-        ${ln.swimmers.length > 1 ? `<div class="swimmer-name">${esc(swimmerLabel(setup, ln.lane, sw.slot, ln.swimmers.length))}</div>` : ''}
-        <div class="live">
-          <div><b>${sw.current ? formatTime(sw.current.elapsed) : '–'}</b><span>${sw.current ? `length ${sw.lengths.length + 1}` : sw.active ? 'at the wall' : 'not in view'}</span></div>
-          <div><b>${fmt(sw.liveRate)}</b><span>stroke rate /min</span></div>
-          <div><b>${last ? formatTime(last.time) : '–'}</b><span>last length</span></div>
-        </div>
-        ${lengthsTable(sw.lengths, ln.stroke, sw.family)}
-      </div>`;
-    }).join('');
-  }
-}
+// ------------------------------------------------------------------ leaving
 
-function lengthsTable(lengths, stroke, family, { length: L, unit } = state.setup) {
-  if (!lengths.length) return '';
-  let cum = 0;
-  const rows = lengths.map((l) => {
-    cum += l.time;
-    return `<tr><td>${l.n}</td><td>${formatTime(l.time)}${l.estimated ? '<span class="est" title="Start estimated">*</span>' : ''}</td>
-      <td>${formatTime(cum)}</td><td>${l.strokes ?? '–'}</td><td>${fmt(l.rate)}</td></tr>`;
-  }).join('');
-  const withRate = lengths.filter((l) => l.rate);
-  const avgRate = withRate.length ? withRate.reduce((s, l) => s + l.rate, 0) / withRate.length : NaN;
-  return `<div class="table-wrap"><table>
-    <thead><tr><th>Length</th><th>Split</th><th>Total</th><th>Strokes</th><th>Rate</th></tr></thead>
-    <tbody>${rows}</tbody>
-    <tfoot><tr><td>${lengths.length * L} ${esc(unit)}</td><td>${formatTime((cum / (lengths.length * L)) * 100)}<span class="muted small"> /100</span></td>
-      <td>${formatTime(cum)}</td><td class="muted small">${esc(strokeName(stroke, family))}</td><td>${fmt(avgRate)}</td></tr></tfoot>
-  </table></div>`;
-}
-
-function recordTables(rec) {
-  if (!rec.swimmers.length) return '<p class="muted">No complete lengths were recorded.</p>';
-  const html = rec.swimmers.map((sw) => `<div class="swimmer"><div class="swimmer-name">${esc(sw.name)}</div>
-    ${lengthsTable(sw.lengths, sw.stroke, sw.lengths.find((l) => l.family)?.family, rec)}</div>`).join('');
-  return `${html}<p class="muted small">Split = wall to wall. Rate = full arm cycles per minute. Strokes = hand entries
-    (free/back) or cycles (fly/breast) per length. * start estimated (no race clock, swimmer first seen after the push-off).</p>`;
-}
-
-function finishTracking() {
-  if (state.mode !== 'track') return;
-  state.mode = 'done';
-  state.source.stop();
+function finish() {
+  if (state.running) { const last = state.detector?.flush(); if (last) addJump(last); }
+  state.running = false;
+  state.source.close();
+  state.pose?.close();
+  state.pose = null;
   state.release?.();
-  const { session } = state;
-  session.finish();
-  const rec = sessionRecord(session);
-  state.record = rec;
-  const saved = saveSession(rec);
-  draw();
-  panel.innerHTML = `
-    <section class="card">
-      <h2>Session results</h2>
-      ${recordTables(rec)}
-      ${rec.swimmers.length && !saved ? '<p class="form-error">Could not save on this device (storage full?). Download the CSV.</p>' : ''}
-      <div class="actions">
-        <button class="btn" id="csv" ${rec.swimmers.length ? '' : 'disabled'}>Download CSV</button>
-        <button class="btn secondary" id="again">Track again</button>
-        <button class="btn secondary" id="adjust">Adjust setup</button>
-        <button class="btn secondary" id="home-btn">Done</button>
-      </div>
-    </section>`;
-  $('#csv').onclick = () => download(`pool-session-${rec.date.slice(0, 16).replace(/[:T]/g, '-')}.csv`, sessionCSV(rec));
-  $('#again').onclick = startTracking;
-  $('#adjust').onclick = showSetup;
-  $('#home-btn').onclick = showHome;
+  state.release = null;
+  state.landmarks = null;
+  state.fps = null;
+  ctx.clearRect(0, 0, overlay.width, overlay.height);
+  const id = state.id;
+  const saved = state.jumps.length > 0;
+  showHome();
+  if (saved) showDetail(id);
 }
 
-// -------------------------------------------------------------------- boot
+document.addEventListener('visibilitychange', async () => {
+  if (state.mode === 'live' && !state.fileMode && document.visibilityState === 'visible') {
+    state.release?.();
+    state.release = await keepAwake();
+  }
+});
+window.addEventListener('pagehide', () => state.release?.());
 
-if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
+if ('serviceWorker' in navigator && location.protocol !== 'file:') {
   navigator.serviceWorker.register('sw.js').catch(() => {});
 }
 
