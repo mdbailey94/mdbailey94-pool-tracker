@@ -7,7 +7,7 @@ sessions on your device only. There are no accounts and no uploads.
 ## Using it
 
 1. Open the app and tap **Start camera**, or **Use a video** to analyse a recording.
-2. Prop the phone so it stays still. Keep your hips, legs and feet in view, from the front or the side, about 2 to 4 m away.
+2. Prop the phone so it stays still. Keep your hips, legs and feet in view for the whole jump, from the front or the side, about 2 to 4 m away. Leave room above your hips for the jump.
 3. Stand still until the screen says **Ready**.
 4. Jump, and land on the same spot with your legs as straight as they were at takeoff.
 5. The height appears in large type. Switch between cm and inches at any time. Delete a jump if it was misread.

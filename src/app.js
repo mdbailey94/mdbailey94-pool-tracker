@@ -135,7 +135,7 @@ function showHome(message = '') {
       <h3>Setting up</h3>
       <ol class="steps">
         <li>Prop the phone so it stays still.</li>
-        <li>Keep your hips, legs and feet in view, from the front or the side, about 2 to 4 m away.</li>
+        <li>Keep your hips, legs and feet in view for the whole jump, from the front or the side, about 2 to 4 m away. Leave room above your hips for the jump.</li>
         <li>Stand still until it says ready.</li>
         <li>Jump and land on the same spot, with your legs as straight as they were at takeoff.</li>
       </ol>
