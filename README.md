@@ -13,9 +13,18 @@ sessions on your device only. There are no accounts and no uploads.
 5. The height appears in large type. Switch between cm and inches at any time. Delete a jump if it was misread.
 6. Tap **Done** to save the session. Past sessions can be reviewed and exported as CSV.
 
-Slow-motion clips are more accurate, because they record more frames per second. Some phones save slow motion
-as a file that plays back slowed down. If you use a video like that, pick the slow-motion speed (2x or 4x)
-before processing, so the flight time is scaled back to real time. Changing it later restarts the video.
+### Using a video
+
+A recorded video is more accurate than the live camera, because every frame is measured. There is nothing
+to set: the app works out the video's frame rate and, for slow motion, how much it was slowed.
+
+What works best:
+
+- 120 frames per second. On an iPhone that is Slo-mo at 1080p, 120 fps. Ordinary 60 fps video is next best.
+- The phone propped up or held very still, level with the hips, 2 to 4 m away.
+- Hips, legs and feet in view for the whole jump, with room above the hips.
+- About a second of standing still before the jump or after the landing. One of the two is enough.
+- Take off and land on the same spot.
 
 ## How the measurement works
 
@@ -28,6 +37,12 @@ The time between them is the flight time, T. A jump follows a simple arc, so the
     height = g * T^2 / 8
 
 with g = 9.81 m/s^2. For example, 0.5 s in the air is about 31 cm.
+
+A video is measured as a whole once it has been read, which gives it two advantages over the live camera.
+Slow motion is recognised from gravity: in a clip slowed 4 times, the body falls 16 times too slowly for
+its size, and only the true play rate gives a person-sized body. And because a jump looks the same played
+backwards, the clip is also read in reverse, so standing still after the landing serves as well as standing
+still before the jump.
 
 Takeoff and landing usually fall between two frames. The detector estimates where between them, so the timing
 is finer than the frame rate. More frames per second still helps.
