@@ -153,8 +153,8 @@ body.is-live { padding-bottom: 0; overflow-x: hidden; }
 .status.ready { border-color: var(--good); background: color-mix(in srgb, var(--good) 22%, var(--surface)); }
 .status.airborne { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 24%, var(--surface)); }
 
-.result-card { text-align: center; padding: 10px 12px 12px; }
-.result { font-size: clamp(76px, 24vw, 168px); font-weight: 800; line-height: 1; font-variant-numeric: tabular-nums; letter-spacing: -.02em; }
+.result-card { text-align: center; padding: 10px 12px 12px; container-type: inline-size; }
+.result { font-size: clamp(64px, 24vw, 168px); font-size: clamp(64px, 34cqw, 168px); font-weight: 800; line-height: 1; font-variant-numeric: tabular-nums; letter-spacing: -.02em; }
 .result small { font-size: .28em; font-weight: 700; margin-left: .15em; letter-spacing: 0; color: var(--text-2); }
 .result-meta { font-size: 16px; color: var(--text-2); font-variant-numeric: tabular-nums; }
 .conf { font-weight: 700; }

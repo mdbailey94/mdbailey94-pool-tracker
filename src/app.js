@@ -313,7 +313,7 @@ function onFrame(v, t) {
     state.landmarks = landmarks;
     // The detector works in real-world time; slow-motion files are scaled back.
     const rt = state.fileMode ? t / state.speed : t;
-    const { status, jump } = state.detector.push({ t: rt, ...sample });
+    const { status, jump } = state.detector.push({ ...sample, t: rt });
     drawPose();
     setStatus(status);
     if (jump) addJump(jump);
