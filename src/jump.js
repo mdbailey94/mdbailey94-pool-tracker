@@ -36,6 +36,8 @@ const DEFAULTS = {
   groundSpan: 0.1, // s of samples on the ground (at least 2)
   groundPrior: 1, // weight (in samples) pulling the local ground level towards the baseline
   riseFactor: 2, // glitch check: feet may rise at most this × takeoff speed next to a crossing
+  contactMode: 'clamp', // fitted contact times kept between the bracketing frames ('fit': not; 'mid': frame midpoints)
+  contactNoise: 3, minContact: 0.012, // 'on the ground': within this many × standing jitter, at least this × bodyLen
   levelNote: 0.02, // landing foot level vs takeoff (× bodyLen): note above this,
   levelReject: 0.06, // reject above this (stepped onto/off something, walked)
   dropNote: 0.05, // hips lower (m) at landing than at takeoff: note above this,
@@ -427,8 +429,37 @@ export class JumpDetector {
     };
     const W = [whole('l'), whole('r')];
     const rigid = hipFit && W.every((w) => w && w.bend < o.rigidTol && Number.isFinite(w.up + w.down));
-    const takeoffT = rigid ? Math.max(W[0].up, W[1].up) : Math.max(hinge('l', true), hinge('r', true));
-    const landingT = rigid ? Math.min(W[0].down, W[1].down) : Math.min(hinge('l', false), hinge('r', false));
+    let takeoffT = rigid ? Math.max(W[0].up, W[1].up) : Math.max(hinge('l', true), hinge('r', true));
+    let landingT = rigid ? Math.min(W[0].down, W[1].down) : Math.min(hinge('l', false), hinge('r', false));
+
+    // The frames themselves. Contact is lost between the last frame with a foot on the
+    // ground and the first with both feet clearly up, and regained between the last
+    // frame with both up and the first with a foot down. Each pair brackets the true
+    // instant whatever the fit says, so the fitted time is kept inside it; with no
+    // usable fit, the middle of the pair is used. "On the ground" is tight (within a
+    // few times the standing jitter), "clearly up" is the airborne margin, so a doubtful
+    // frame widens the bracket rather than moving it.
+    const near = Math.max(o.contactNoise * b.noise, o.minContact) * b.L;
+    const down = (q, g) => Math.min(g.l - q.l, g.r - q.r) <= near; // lower foot at ground level
+    const up = (q, g) => Math.min(g.l - q.l, g.r - q.r) > m; // both feet over the margin
+    const i0 = S.indexOf(air[0]), i1 = S.indexOf(air.at(-1));
+    let a = i0; while (a > 0 && !down(S[a], b)) a--; // last ground frame before the flight
+    let bI = a + 1; while (bI < i0 && !up(S[bI], b)) bI++; // first clearly-up frame after it
+    let d = i1; while (d < S.length - 1 && S[d].t < until && !down(S[d], ground)) d++; // first ground frame after
+    let cI = d - 1; while (cI > i1 && !up(S[cI], ground)) cI--; // last clearly-up frame before it
+    // A foot within `near` of the ground can already be in the air: at takeoff speed it
+    // takes near / v0 to rise that far. So the last ground frame bounds takeoff only to
+    // within that, and likewise the first ground frame bounds landing.
+    const v0fit = c * (landingT - takeoffT), lift0 = v0fit > 0 ? near / v0fit : 0;
+    // lo, hi: the two frames; early, late: how much further the true moment may lie.
+    const bracket = (lo, hi, t, early, late) => {
+      if (!(lo < hi)) return t;
+      if (o.contactMode === 'mid' || !Number.isFinite(t)) return (lo + hi) / 2;
+      if (o.contactMode === 'fit') return t;
+      return Math.min(hi + late, Math.max(lo - early, t));
+    };
+    if (down(S[a], b) && S[bI]) takeoffT = bracket(S[a].t, S[bI].t, takeoffT, lift0, 0);
+    if (down(S[d], ground) && S[cI] && d > cI) landingT = bracket(S[cI].t, S[d].t, landingT, 0, lift0);
     const T = landingT - takeoffT;
     if (!(T >= o.minFlight && T <= o.maxFlight)) return fail('Flight time not plausible for a jump');
     // Physics checks against tracking glitches (landmarks snapping up for a few frames).

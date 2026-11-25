@@ -60,8 +60,11 @@ its size, and only the true play rate gives a person-sized body. And because a j
 backwards, the clip is also read in reverse, so standing still after the landing serves as well as standing
 still before the jump.
 
-Takeoff and landing usually fall between two frames. The detector estimates where between them, so the timing
-is finer than the frame rate. More frames per second still helps.
+Takeoff and landing usually fall between two frames. The app finds, at each end, the last frame with a foot on
+the ground and the first with both feet clearly up: the true moment lies between them. Within that pair it
+uses the arc the feet follow in the air to place the moment more finely, and it never lets the estimate fall
+outside the pair. Simply averaging the two frames was tried and reads short by 15 to 35 ms (2 to 5 cm),
+because the "clearly up" frame comes a little after takeoff and a little before landing.
 
 Flight time gives the height exactly only if you take off and land in the same posture. The formula assumes
 your body is in the same position at both moments. Two common departures are measured and allowed for:
