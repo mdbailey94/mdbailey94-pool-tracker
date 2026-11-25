@@ -759,7 +759,7 @@ function renderTilt() {
   // Over the picture only while the angle needs fixing.
   hint.hidden = ok || state.fileMode;
   if (!ok) hint.textContent = `${text} · ${Math.round(t.elevation)}°, aim for about ${target}°`;
-  box.className = `tilt live ${ok ? 'ok' : 'off'}`;
+  box.className = `tilt sensed ${ok ? 'ok' : 'off'}`; // not 'live': that is the full-screen view's class
   $('#tilt-text').textContent = `${Math.round(t.elevation)}° (aim for about ${target}°) · ${text}`;
   $('#tilt-mark').style.left = `${Math.max(0, Math.min(100, (t.elevation / 90) * 100))}%`;
 }

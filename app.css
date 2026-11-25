@@ -277,7 +277,7 @@ body.is-live { overflow: hidden; }
 /* phone placement */
 .tilt { display: flex; align-items: center; gap: 10px; font-size: 14px; color: var(--text-2); padding: 2px 4px; }
 .tilt-bar { display: none; position: relative; flex: none; width: 96px; height: 10px; border-radius: 999px; background: var(--border); }
-.tilt.live .tilt-bar { display: block; }
+.tilt.sensed .tilt-bar { display: block; }
 .tilt-zone { position: absolute; top: 0; bottom: 0; left: 33.3%; width: 27.8%; border-radius: 999px; background: color-mix(in srgb, var(--good) 55%, transparent); } /* 30° to 55° of 90° */
 .tilt-mark { position: absolute; top: -4px; width: 4px; height: 18px; margin-left: -2px; border-radius: 2px; background: var(--text); }
 .tilt.ok { color: var(--text); font-weight: 700; }
