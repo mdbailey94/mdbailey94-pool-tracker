@@ -111,7 +111,7 @@ export function horizonTilt(beta, gamma) {
   return Math.abs(upright) <= Math.abs(sideways) ? upright : sideways;
 }
 
-// The phone sits on the ground leaning back, so the camera looks up at the athletes.
+// The phone sits on the ground, tilted so the camera looks up at the athletes.
 // How far back depends on how it is held. On its side with the 0.5x wide camera, about
 // 15 degrees keeps the ground and the top of the jump both in the picture. Upright, the
 // picture is taller and about 45 degrees works. These are starting points: the

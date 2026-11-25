@@ -37,7 +37,7 @@ to set: the app works out the video's frame rate and, for slow motion, how much 
 What works best:
 
 - 120 frames per second. On an iPhone that is Slo-mo at 1080p, 120 fps. Ordinary 60 fps video is next best.
-- The phone on the ground on its side, leaning back about 15°, filming at 0.5×, 2 to 3 m away. Propped still.
+- The phone on the ground on its side, camera tilted up about 15°, filming at 0.5×, 2 to 3 m away. Propped still.
 - Hips, legs and feet in view for the whole jump, with room above the hips.
 - About a second of standing still before the jump or after the landing. One of the two is enough.
 - Take off and land on the same spot.
