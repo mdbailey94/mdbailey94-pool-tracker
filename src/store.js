@@ -1,6 +1,7 @@
 // Finished jump sessions and the chosen unit, on this device only.
 // Session record: { id, startedAt, athletes, jumps: [{ at, athlete, heightM, flightTime, confidence,
-//   lowM, highM, flightHeightM, headRiseM }] }. heightM is the reported height; lowM–highM its 95% range;
+//   lowM, highM, flightHeightM, headRiseM, pushOffM, offsetM }] }. offsetM is the jump-and-reach
+// adjustment that was in use; what is shown is heightM + offsetM. heightM is the reported height; lowM–highM its 95% range;
 // flightHeightM what flight time alone gives; headRiseM how far the head rose above standing.
 // athlete is 0-based; records saved before athletes were added have neither field.
 
@@ -8,6 +9,7 @@ const SESSIONS_KEY = 'jump-height-sessions';
 const UNIT_KEY = 'jump-height-unit';
 const ATHLETES_KEY = 'jump-height-athletes';
 const FACING_KEY = 'jump-height-camera';
+const OFFSET_KEY = 'jump-height-reach-offset';
 const MAX_SESSIONS = 100;
 
 function read(key, fallback) {
@@ -40,6 +42,10 @@ export const saveAthletes = (n) => write(ATHLETES_KEY, n);
 export const loadFacing = () => (read(FACING_KEY, 'user') === 'environment' ? 'environment' : 'user');
 export const saveFacing = (f) => write(FACING_KEY, f);
 
+// Jump-and-reach adjustment (m), set by the user to match a Vertec or wall test.
+export const loadOffset = () => { const v = Number(read(OFFSET_KEY, 0)); return Number.isFinite(v) && Math.abs(v) <= 0.3 ? v : 0; };
+export const saveOffset = (m) => write(OFFSET_KEY, m);
+
 // Stored data is not trusted: the storage is shared by every page on this
 // origin, so anything that isn't a well-formed session is dropped.
 const validJump = (j) => j && Number.isFinite(j.heightM) && Number.isFinite(j.flightTime);
@@ -67,14 +73,20 @@ export function deleteSession(id) {
 const cell = (v) => (/[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : String(v));
 
 export function sessionCSV(rec) {
+  // height, low and high are as shown in the app: they include any jump-and-reach adjustment.
   const rows = [['session_started', 'jump', 'athlete', 'time', 'height_cm', 'height_in', 'low_cm', 'high_cm',
-    'flight_time_only_cm', 'head_rise_cm', 'flight_time_ms', 'confidence']];
+    'adjustment_cm', 'flight_time_only_cm', 'push_off_cm', 'head_rise_cm', 'flight_time_ms', 'confidence']];
   const cm = (m) => (Number.isFinite(m) ? (m * 100).toFixed(1) : '');
-  rec.jumps.forEach((j, i) => rows.push([
-    rec.startedAt, i + 1, (j.athlete || 0) + 1, new Date(j.at).toISOString(),
-    (j.heightM * 100).toFixed(1), (j.heightM * 39.3701).toFixed(1), cm(j.lowM), cm(j.highM), cm(j.flightHeightM), cm(j.headRiseM),
-    Math.round(j.flightTime * 1000), j.confidence,
-  ]));
+  rec.jumps.forEach((j, i) => {
+    const a = Number.isFinite(j.offsetM) ? j.offsetM : 0;
+    const h = j.heightM + a;
+    rows.push([
+      rec.startedAt, i + 1, (j.athlete || 0) + 1, new Date(j.at).toISOString(),
+      (h * 100).toFixed(1), (h * 39.3701).toFixed(1), cm(j.lowM + a), cm(j.highM + a),
+      (a * 100).toFixed(1), cm(j.flightHeightM), cm(j.pushOffM), cm(j.headRiseM),
+      Math.round(j.flightTime * 1000), j.confidence,
+    ]);
+  });
   return `${rows.map((r) => r.map(cell).join(',')).join('\n')}\n`;
 }
 

@@ -2,11 +2,12 @@
 // file, delivered as the <video> element itself plus a per-frame timestamp in
 // seconds. Jump height comes from flight time, so frame timing is the product.
 
-// Frame callbacks fire at most once per screen refresh, so a file must be played
-// slowly enough that each of its frames gets its own refresh. Its frame rate is
-// not known up front, so the first frames are played very slowly while the
-// spacing of their timestamps is measured; playback then runs as fast as that
-// frame rate allows on a 60 Hz screen, with a little margin.
+// A file is measured by stepping through it: its frame rate is found by playing the
+// first frames slowly and measuring the spacing of their timestamps, then the video
+// is paused and moved to each frame in turn. Every frame is measured, in order, the
+// same way every time. (Playing it through instead skipped frames unpredictably, so the
+// same clip read differently from one run to the next.) Browsers without per-frame
+// callbacks fall back to slow playback.
 const PROBE_RATE = 0.2; // slow enough for anything up to 240 fps
 const PROBE_FRAMES = 8;
 const SAFE_FPS = 48; // frames presented per second of wall time, under 60 Hz
@@ -121,6 +122,10 @@ export class VideoSource {
     this.onFrame = onFrame;
     this.running = true;
     this.lastT = -Infinity;
+    if (!this.live && this.video.requestVideoFrameCallback) {
+      this.stepFile();
+      return;
+    }
     if (!this.live) {
       // openFile parks the video just past the start to show a frame; measure from the top.
       if (this.video.currentTime < 0.5) this.video.currentTime = 0;
@@ -177,6 +182,69 @@ export class VideoSource {
   // Works out a file's frame rate from the spacing of its first frames (the
   // median, so a variable-rate recording's odd gap doesn't matter), then sets
   // the playback speed to suit. source.fps stays null until this is known.
+  // Plays the first frames slowly and sets this.fps from the spacing of their
+  // timestamps (the median, so a variable-rate recording's odd gap doesn't matter).
+  probeRate() {
+    const v = this.video;
+    return new Promise((resolve) => {
+      const gaps = [];
+      let last = null, done = false;
+      const finish = () => {
+        if (done) return;
+        done = true;
+        v.pause();
+        if (gaps.length) this.fps = Math.round(1 / [...gaps].sort((a, b) => a - b)[gaps.length >> 1]);
+        resolve();
+      };
+      const tick = (now, meta) => {
+        if (done) return;
+        if (last != null && meta.mediaTime > last) gaps.push(meta.mediaTime - last);
+        last = meta.mediaTime;
+        if (gaps.length >= PROBE_FRAMES || !this.running) finish();
+        else v.requestVideoFrameCallback(tick);
+      };
+      v.playbackRate = PROBE_RATE;
+      v.currentTime = 0;
+      v.requestVideoFrameCallback(tick);
+      v.play().catch(finish);
+      setTimeout(finish, 5000); // a clip too short to measure: fall back below
+    });
+  }
+
+  // Moves a paused video to a time and waits until that frame is ready.
+  seek(time) {
+    const v = this.video;
+    if (Math.abs(v.currentTime - time) < 1e-6 && v.readyState >= 2) return Promise.resolve();
+    return new Promise((resolve) => {
+      const timer = setTimeout(done, 3000);
+      function done() { clearTimeout(timer); v.removeEventListener('seeked', done); resolve(); }
+      v.addEventListener('seeked', done);
+      v.currentTime = time;
+    });
+  }
+
+  async stepFile() {
+    const v = this.video;
+    if (this.fps == null) await this.probeRate();
+    if (!this.running) return;
+    const fps = this.fps || 30;
+    v.pause();
+    const n = Math.max(1, Math.floor((v.duration || 0) * fps + 1e-6));
+    for (let i = 0; i < n; i++) {
+      // The middle of each frame's display time, so rounding never lands on its neighbour.
+      await this.seek(Math.min((i + 0.5) / fps, Math.max(0, v.duration - 1e-3)));
+      if (!this.running) return;
+      try {
+        await this.onFrame?.(v, i / fps);
+      } catch (e) {
+        console.error(e);
+      }
+      if (!this.running) return;
+    }
+    this.running = false;
+    v.dispatchEvent(new Event('ended')); // the same signal as a video played to its end
+  }
+
   probe(gap) {
     this.gaps.push(gap);
     if (this.gaps.length < PROBE_FRAMES) return;

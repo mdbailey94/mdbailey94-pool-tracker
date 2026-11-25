@@ -6,8 +6,8 @@ import {
   GUIDE, MAX_ATHLETES, TILTS, assignLanes, cameraElevation, framingHint, horizonTilt, laneBounds, placementAdvice, tiltFor,
 } from './lanes.js';
 import {
-  deleteSession, download, loadAthletes, loadFacing, loadSessions, loadUnit, newSessionId, saveAthletes, saveFacing,
-  saveSession, saveUnit,
+  deleteSession, download, loadAthletes, loadFacing, loadOffset, loadSessions, loadUnit, newSessionId, saveAthletes,
+  saveFacing, saveOffset, saveSession, saveUnit,
   sessionCSV,
 } from './store.js';
 
@@ -35,6 +35,7 @@ const state = {
   mode: 'home',
   source: new VideoSource(video),
   unit: loadUnit(),
+  offsetM: loadOffset(), // jump-and-reach adjustment added to every reading (m)
   detail: null,
   // live session
   fileMode: false,
@@ -69,7 +70,12 @@ const when = (iso) => new Date(iso).toLocaleString(undefined, { dateStyle: 'medi
 const best = (jumps) => jumps.reduce((b, j) => (!b || j.heightM > b.heightM ? j : b), null);
 const ofAthlete = (jumps, i) => jumps.filter((j) => (j.athlete || 0) === i);
 // "49.8–55.0": the range the true height is 95% likely to be in (older records have none).
-const rangeText = (j) => (Number.isFinite(j.lowM) && Number.isFinite(j.highM) ? `${heightText(j.lowM)}–${heightText(j.highM)}` : '');
+// What a jump reads as on screen: its height plus the jump-and-reach adjustment in use.
+const adjOf = (j) => (Number.isFinite(j.offsetM) ? j.offsetM : 0);
+const shown = (j) => j.heightM + adjOf(j);
+const rangeText = (j) => (Number.isFinite(j.lowM) && Number.isFinite(j.highM)
+  ? `${heightText(j.lowM + adjOf(j))}–${heightText(j.highM + adjOf(j))}` : '');
+const signed = (m) => `${m > 0 ? '+' : m < 0 ? '−' : ''}${heightText(Math.abs(m))}`;
 // The second measure, and whether it sits where it should against the first. The head
 // counts the rise onto the toes, so a little more than flight time is normal.
 function headText(j) {
@@ -95,7 +101,7 @@ const mirrored = () => !state.fileMode && state.facing === 'user';
 function setUnit(unit) {
   state.unit = unit;
   saveUnit(unit);
-  if (state.mode === 'live') renderJumps();
+  if (state.mode === 'live') { renderJumps(); renderOffset(); }
   if (state.mode === 'detail') showDetail(state.detail);
 }
 
@@ -188,7 +194,7 @@ function showHome(message = '') {
       <ul class="plain history">${sessions.slice(0, 10).map((s) => {
     const b = best(s.jumps);
     return `<li><div><b>${esc(when(s.startedAt))}</b><br>
-        <span class="muted small">${s.athletes > 1 ? `${s.athletes} athletes · ` : ''}${s.jumps.length} jump${s.jumps.length === 1 ? '' : 's'}${b ? ` · best ${heightText(b.heightM)} ${unitText()}` : ''}</span></div>
+        <span class="muted small">${s.athletes > 1 ? `${s.athletes} athletes · ` : ''}${s.jumps.length} jump${s.jumps.length === 1 ? '' : 's'}${b ? ` · best ${heightText(shown(b))} ${unitText()}` : ''}</span></div>
         <button class="btn secondary small-btn" data-view="${esc(s.id)}">View</button></li>`;
   }).join('')}</ul>
     </section>` : ''}`;
@@ -234,7 +240,7 @@ function showDetail(id) {
   state.mode = 'detail';
   state.detail = id;
   const b = best(rec.jumps);
-  const avg = rec.jumps.reduce((n, j) => n + j.heightM, 0) / (rec.jumps.length || 1);
+  const avg = rec.jumps.reduce((n, j) => n + shown(j), 0) / (rec.jumps.length || 1);
   const many = Math.max(rec.athletes || 1, ...rec.jumps.map((j) => (j.athlete || 0) + 1));
   homeEl.innerHTML = `
     <section class="card">
@@ -242,18 +248,18 @@ function showDetail(id) {
       <div class="bar">${unitToggle()}</div>
       <div class="stats">
         <div><b>${rec.jumps.length}</b><span>jumps</span></div>
-        <div><b>${b ? heightText(b.heightM) : '–'}</b><span>best (${unitText()})</span></div>
+        <div><b>${b ? heightText(shown(b)) : '–'}</b><span>best (${unitText()})</span></div>
         <div><b>${rec.jumps.length ? heightText(avg) : '–'}</b><span>average (${unitText()})</span></div>
       </div>
       ${many > 1 ? `<div class="tiles" style="--lanes:${many}">${Array.from({ length: many }, (_, k) => {
     const mine = ofAthlete(rec.jumps, k);
     const top = best(mine);
     return `<div class="tile"><span class="tile-name">Athlete ${k + 1}</span>
-          <b>${top ? heightText(top.heightM) : '–'}<small>${unitText()}</small></b>
+          <b>${top ? heightText(shown(top)) : '–'}<small>${unitText()}</small></b>
           <span class="muted small">best of ${mine.length}</span></div>`;
   }).join('')}</div>` : ''}
       <ul class="jumps">${rec.jumps.map((j, i) => `<li class="${j === b ? 'best' : ''}">
-        <div><b>${heightText(j.heightM)} ${unitText()}</b>${j === b ? '<span class="badge">Best</span>' : ''}<br>
+        <div><b>${heightText(shown(j))} ${unitText()}</b>${j === b ? '<span class="badge">Best</span>' : ''}<br>
         <span class="muted small">${many > 1 ? `Athlete ${(j.athlete || 0) + 1} · ` : ''}#${i + 1} · ${rangeText(j) ? `95% range ${rangeText(j)} · ` : ''}${Number.isFinite(j.headRiseM) ? `head rose ${heightText(j.headRiseM)} · ` : ''}${Math.round(j.flightTime * 1000)} ms · ${esc(j.confidence)} confidence</span></div></li>`).join('')}</ul>
       <div class="actions">
         <button class="btn" id="d-csv">Export CSV</button>
@@ -447,7 +453,7 @@ function addJump(j, athlete = 0) {
   state.jumps.push({
     at: Date.now(), athlete, heightM: j.heightM, flightTime: j.flightTime, confidence: j.confidence, notes: j.notes || [],
     lowM: j.lowM, highM: j.highM, flightHeightM: j.flightHeightM, bentLandingM: j.bentLandingM, tuckM: j.tuckM,
-    headRiseM: j.headRiseM, headRiseSdM: j.headRiseSdM,
+    headRiseM: j.headRiseM, headRiseSdM: j.headRiseSdM, pushOffM: j.pushOffM, offsetM: state.offsetM,
   });
   state.latest = state.jumps[state.jumps.length - 1];
   persist();
@@ -460,8 +466,8 @@ function persist() {
     id: state.id,
     startedAt: state.startedAt,
     athletes: state.lanes.length,
-    jumps: state.jumps.map(({ at, athlete, heightM, flightTime, confidence, lowM, highM, flightHeightM, headRiseM }) => ({
-      at, athlete, heightM, flightTime, confidence, lowM, highM, flightHeightM, headRiseM,
+    jumps: state.jumps.map(({ at, athlete, heightM, flightTime, confidence, lowM, highM, flightHeightM, headRiseM, pushOffM, offsetM }) => ({
+      at, athlete, heightM, flightTime, confidence, lowM, highM, flightHeightM, headRiseM, pushOffM, offsetM,
     })),
   });
 }
@@ -489,6 +495,15 @@ function buildPanel() {
       <ul class="jumps" id="jumps"></ul>
     </section>
     <section class="card">
+      <h3>Jump-and-reach adjustment</h3>
+      <div class="stepper">
+        <button class="btn secondary small-btn" id="adj-down" type="button" aria-label="Less">−</button>
+        <b id="adj-value"></b>
+        <button class="btn secondary small-btn" id="adj-up" type="button" aria-label="More">+</button>
+      </div>
+      <p class="muted small">The app measures flight time, which does not count rising onto your toes before takeoff, so it reads a few cm below a Vertec or wall-reach test. To match one, do a few jumps on both and set this to the average difference. It is added to every reading and shown with it.</p>
+    </section>
+    <section class="card">
       <h3>Setup</h3>
       ${state.fileMode ? '' : `<div class="tilt" id="tilt">
         <div class="tilt-bar" aria-hidden="true"><i class="tilt-zone" id="tilt-zone"></i><i class="tilt-mark" id="tilt-mark"></i></div>
@@ -504,6 +519,9 @@ function buildPanel() {
   bindUnitToggle(panel);
   $('#done').onclick = finish;
   $('#panel-close').onclick = closePanel;
+  $('#adj-down').onclick = () => stepOffset(-1);
+  $('#adj-up').onclick = () => stepOffset(1);
+  renderOffset();
   const flip = $('#flip');
   if (flip) flip.onclick = () => reopenCamera({ facing: state.facing === 'environment' ? 'user' : 'environment' });
   const lens = $('#lens');
@@ -527,6 +545,24 @@ function buildPanel() {
   renderFps();
   renderTilt();
   renderTurn();
+}
+
+// One step of the adjustment: half a centimetre, or 0.2 inch.
+function stepOffset(dir) {
+  const step = state.unit === 'in' ? 0.2 / 39.3701 : 0.005;
+  const next = Math.round((state.offsetM + dir * step) / step) * step;
+  state.offsetM = Math.max(-0.3, Math.min(0.3, Math.abs(next) < 1e-9 ? 0 : next));
+  saveOffset(state.offsetM);
+  // This session is being calibrated: its readings follow the new setting.
+  state.jumps.forEach((j) => { j.offsetM = state.offsetM; });
+  if (state.jumps.length) persist();
+  renderOffset();
+  renderJumps();
+}
+
+function renderOffset() {
+  const el = $('#adj-value');
+  if (el) el.textContent = state.offsetM ? `${signed(state.offsetM)} ${unitText()}` : 'None';
 }
 
 // ------------------------------------------------------------ slide-out panel
@@ -618,8 +654,9 @@ function renderJumps() {
       <span class="conf ${esc(j.confidence)}">${esc(j.confidence)} confidence</span>`;
   if (n === 1) {
     card.innerHTML = l ? `
-    <div class="result" aria-label="Latest jump">${heightText(l.heightM)}<small>${unitText()}</small></div>
+    <div class="result" aria-label="Latest jump">${heightText(shown(l))}<small>${unitText()}</small></div>
     <div class="result-meta">${rangeText(l) ? `<b>95% range ${rangeText(l)} ${unitText()}</b><br>` : ''}${meta(l)}</div>
+    ${adjOf(l) ? `<p class="adjust">Includes ${signed(adjOf(l))} ${unitText()} jump-and-reach adjustment.</p>` : ''}
     ${adjustText(l) ? `<p class="adjust">${esc(adjustText(l))}</p>` : ''}
     ${headText(l) ? `<p class="adjust">${esc(headText(l))}</p>` : ''}
     ${conf !== 'high' && l.notes.length ? `<ul class="notes">${l.notes.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>` : ''}`
@@ -631,8 +668,8 @@ function renderJumps() {
       const mine = ofAthlete(state.jumps, i);
       const last = mine[mine.length - 1];
       return `<div class="tile"><span class="tile-name">Athlete ${i + 1}</span>
-        <b>${last ? heightText(last.heightM) : '–'}<small>${unitText()}</small></b>
-        <span class="muted small">${last && rangeText(last) ? `${rangeText(last)} · ` : ''}${bests[i] ? `best ${heightText(bests[i].heightM)}` : 'no jump yet'}</span></div>`;
+        <b>${last ? heightText(shown(last)) : '–'}<small>${unitText()}</small></b>
+        <span class="muted small">${last && rangeText(last) ? `${rangeText(last)} · ` : ''}${bests[i] ? `best ${heightText(shown(bests[i]))}` : 'no jump yet'}</span></div>`;
     }).join('')}</div>
     ${l && adjustText(l) ? `<p class="adjust"><b>Athlete ${l.athlete + 1}:</b> ${esc(adjustText(l))}</p>` : ''}
     ${l && headText(l) ? `<p class="adjust"><b>Athlete ${l.athlete + 1}:</b> ${esc(headText(l))}</p>` : ''}
@@ -644,11 +681,11 @@ function renderJumps() {
     if (!el) return;
     const mine = ofAthlete(state.jumps, i);
     const last = mine[mine.length - 1];
-    el.innerHTML = last ? `${heightText(last.heightM)}<small>${unitText()}</small>${rangeText(last) ? `<span class="lane-range">${rangeText(last)}</span>` : ''}` : '';
+    el.innerHTML = last ? `${heightText(shown(last))}<small>${unitText()}</small>${rangeText(last) ? `<span class="lane-range">${rangeText(last)}</span>` : ''}` : '';
   });
   list.innerHTML = state.jumps.length ? state.jumps.map((j, i) => `
     <li class="${j === bests[j.athlete] ? 'best' : ''}">
-      <div><b>${heightText(j.heightM)} ${unitText()}</b>${j === bests[j.athlete] ? '<span class="badge">Best</span>' : ''}<br>
+      <div><b>${heightText(shown(j))} ${unitText()}</b>${j === bests[j.athlete] ? '<span class="badge">Best</span>' : ''}<br>
         <span class="muted small">${n > 1 ? `Athlete ${j.athlete + 1} · ` : ''}#${i + 1} · ${rangeText(j) ? `${rangeText(j)} · ` : ''}${Math.round(j.flightTime * 1000)} ms · ${esc(j.confidence)}</span></div>
       <button class="icon-btn" data-del="${i}" aria-label="Delete jump ${i + 1}">✕</button>
     </li>`).reverse().join('') : '<li class="muted">Jumps you make will appear here.</li>';

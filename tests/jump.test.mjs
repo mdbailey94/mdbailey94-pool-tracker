@@ -469,3 +469,25 @@ test('holdAfter: a jump during the hold is ignored, the next one after it counts
   const { samples } = simulate({ seed: 5, fps: 60, noise: 0.008, script: [stand(), { type: 'jump', height: 0.3 }, stand(0.6), { type: 'jump', height: 0.45 }, stand(3), { type: 'jump', height: 0.35 }, stand(1.2)] });
   assert.equal(run(new JumpDetector(), samples).jumps.length, 3);
 });
+
+// ---- push-off: the rise between standing tall and takeoff, which flight time leaves out
+
+test('push-off rise: measured from standing tall to takeoff, added in the jump-and-reach figure', () => {
+  for (const fps of [60, 120]) for (const heelRise of [0.04, 0.07, 0.1]) {
+    const errs = [];
+    for (const h of [0.25, 0.4, 0.55]) for (let seed = 1; seed <= 6; seed++) {
+      const { samples, truth } = simulate({ seed: seed * 41 + fps, fps, noise: 0.008, smoothing: {}, script: [stand(1.5), { type: 'jump', height: h, heelRise }, stand(1.2)] });
+      const j = run(new JumpDetector(), samples).jumps[0];
+      assert.ok(j && Number.isFinite(j.pushOffM), `${fps} fps heels ${heelRise} seed ${seed}: no push-off`);
+      assert.ok(Math.abs(j.reachM - (j.heightM + j.pushOffM)) < 1e-12);
+      assert.ok(j.reachLowM <= j.reachM && j.reachM <= j.reachHighM);
+      errs.push(j.reachM - truth[0].riseM); // riseM: from standing tall to the top
+    }
+    const mean = errs.reduce((a, b) => a + Math.abs(b), 0) / errs.length;
+    assert.ok(mean < 0.02, `${fps} fps heels ${heelRise}: off by ${(mean * 100).toFixed(1)} cm on average`);
+  }
+  // Seen only backwards (clip starts mid-crouch), there is no standing-tall reference.
+  const { samples, truth } = simulate({ seed: 9, fps: 60, noise: 0.008, smoothing: {}, script: [stand(1.5), { type: 'jump', height: 0.4 }, stand(1.2)] });
+  const late = analyseRecording(samples.filter((s) => s.t >= truth[0].takeoffT - 0.2)).jumps[0];
+  assert.ok(late && Number.isNaN(late.pushOffM) && Number.isNaN(late.reachM));
+});

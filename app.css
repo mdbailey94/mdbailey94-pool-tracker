@@ -307,3 +307,6 @@ body.is-live { overflow: hidden; }
 .tips[open] summary::after { content: '–'; }
 .tips[open] summary { margin-bottom: 8px; }
 .big-actions .btn { min-height: 52px; font-size: 17px; }
+.stepper { display: flex; align-items: center; gap: 12px; margin: 4px 0 6px; }
+.stepper b { min-width: 72px; text-align: center; font-size: 18px; font-variant-numeric: tabular-nums; }
+.stepper .btn { width: 44px; min-height: 40px; padding: 0; font-size: 20px; }

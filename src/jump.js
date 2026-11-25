@@ -97,7 +97,19 @@ const EST = {
   timeBase: 0.004, timePerFrame: 0.25, // flight-time sd (s): base + share of one frame interval
   blind: 0.02, // extra sd (m) when too few frames were seen to check posture at all
   moved: 0.015, // extra sd (m) when the landing spot was not the takeoff spot
+  pushScale: 0.12, pushBase: 0.008, // push-off rise sd: share of it, plus a fixed part (m)
 };
+
+// Jump-and-reach equivalent: the flight-time height plus the push-off rise, with its
+// own range. The push-off rise is about 5 to 10 cm, measured with a scale good to
+// roughly a tenth, plus landmark noise.
+export function withReach(est, pushOffM) {
+  if (!Number.isFinite(pushOffM)) return { ...est, pushOffM: NaN, reachM: NaN, reachLowM: NaN, reachHighM: NaN };
+  const sdH = (est.highM - est.heightM) / 1.96;
+  const sd = Math.hypot(sdH, EST.pushScale * pushOffM + EST.pushBase);
+  const reachM = est.heightM + pushOffM;
+  return { ...est, pushOffM, reachM, reachLowM: Math.max(0, reachM - 1.96 * sd), reachHighM: reachM + 1.96 * sd };
+}
 
 export function estimateHeight({ flightTime: T, frames, dropM, foldM, moved = false }) {
   const flightHeightM = heightFromFlightTime(T);
@@ -275,7 +287,16 @@ export class JumpDetector {
         if (!Number.isFinite(e) || m < e) { e = m; eL = L; } // y grows downward: smaller is higher
       }
     }
-    this.base = { l: median(w.map((q) => q.l)), r: median(w.map((q) => q.r)), h: median(w.map((q) => q.h)), L, noise, margin, e, eL };
+    // Hip level when standing tall, for the jump-and-reach figure: the same rules as the
+    // head (highest level held still, legs straight), so a held crouch never counts.
+    let hT = this.base ? this.base.hT : NaN, hTL = this.base ? this.base.hTL : NaN;
+    const hv = w.map((q) => q.h);
+    if (robustSd(hv) < o.stillTol * L && Math.abs(median(hv.slice(0, half)) - median(hv.slice(half))) < 0.5 * o.stillTol * L &&
+        median(w.map((q) => q.k)) >= o.straightLeg) {
+      const m = median(hv);
+      if (!Number.isFinite(hT) || m < hT) { hT = m; hTL = L; }
+    }
+    this.base = { l: median(w.map((q) => q.l)), r: median(w.map((q) => q.r)), h: median(w.map((q) => q.h)), L, noise, margin, e, eL, hT, hTL };
     this.phase = 'ready';
   }
 
@@ -484,13 +505,25 @@ export class JumpDetector {
       }
     }
 
+    // How far the hips rose between standing tall and leaving the ground: up onto the
+    // toes and through the ankles. Flight time does not count it; a jump-and-reach test
+    // (standing reach to highest touch, as on a Vertec) does. Hip height at takeoff comes
+    // from the flight arc, the scale from its curvature, so no body size is assumed.
+    let pushOffM = NaN;
+    const tallHips = Number.isFinite(b.hT) && b.hTL >= o.tallLeg * median(air.map((q) => q.L));
+    if (hipFit && tallHips) {
+      const hipTO = hipFit[0] + hipFit[1] * (takeoffT - tm) + hipFit[2] * (takeoffT - tm) ** 2;
+      const rise = ((b.hT - hipTO) * G) / (2 * c);
+      if (rise > -0.05 && rise < 0.35) pushOffM = Math.max(0, rise);
+    }
+
     // Same spot → keep the baseline and stay ready for the next jump; else re-learn the ground.
     if (shift > o.levelNote) { this.base = null; this.phase = 'settling'; } else this.phase = 'ready';
     return {
       takeoffT, landingT, flightTime: T,
       confidence: ['low', 'medium', 'high'][conf], notes, bodyM, apexT: hipFit ? tApex : NaN,
       dropM, foldM, freeFall, rigid: Boolean(rigid), frames: air.length, moved: shift > o.levelNote, headRiseM, headRiseSdM,
-      ...estimateHeight({ flightTime: T, frames: air.length, dropM, foldM, moved: shift > o.levelNote }),
+      ...withReach(estimateHeight({ flightTime: T, frames: air.length, dropM, foldM, moved: shift > o.levelNote }), pushOffM),
     };
   }
 }
@@ -548,7 +581,7 @@ function unreverse(j) {
   const dropM = -j.dropM;
   return {
     ...j, takeoffT: -j.landingT, landingT: -j.takeoffT, apexT: -j.apexT, dropM, notes: j.notes.map(swap),
-    ...estimateHeight({ flightTime: j.flightTime, frames: j.frames, dropM, foldM: j.foldM, moved: j.moved }),
+    ...withReach(estimateHeight({ flightTime: j.flightTime, frames: j.frames, dropM, foldM: j.foldM, moved: j.moved }), NaN),
   };
 }
 
@@ -569,9 +602,11 @@ export function analyseRecording(samples, { rates = PLAY_RATES, options } = {}) 
       const i = jumps.findIndex((f) => f.takeoffT < r.landingT && r.takeoffT < f.landingT);
       // Head rise needs a standing-tall reference from before the jump; seen backwards the
       // "before" is the recovery after landing, so only the forward pass's figure is kept.
+      // The same holds for the push-off rise.
       const noHead = { headRiseM: NaN, headRiseSdM: NaN };
       if (i >= 0) {
-        if (RANK[r.confidence] > RANK[jumps[i].confidence]) jumps[i] = { ...r, headRiseM: jumps[i].headRiseM, headRiseSdM: jumps[i].headRiseSdM };
+        const f = jumps[i];
+        if (RANK[r.confidence] > RANK[f.confidence]) jumps[i] = { ...withReach(r, f.pushOffM), headRiseM: f.headRiseM, headRiseSdM: f.headRiseSdM };
         continue;
       }
       // Seen only backwards. That is what the reverse pass is for when the clip starts
@@ -579,7 +614,7 @@ export function analyseRecording(samples, { rates = PLAY_RATES, options } = {}) 
       // pass looked at the same moment and saw no jump, and it is the one to believe: if
       // the athlete landed nearer the camera, then seen backwards they stand "above" the
       // new ground level at their old spot, which looks like hovering.
-      if (r.takeoffT < fwd.readyAt) jumps.push({ ...r, ...noHead });
+      if (r.takeoffT < fwd.readyAt) jumps.push({ ...withReach(r, NaN), ...noHead });
     }
     if (!jumps.length) continue;
     jumps.sort((a, b) => a.takeoffT - b.takeoffT);
