@@ -7,6 +7,7 @@
 const SESSIONS_KEY = 'jump-height-sessions';
 const UNIT_KEY = 'jump-height-unit';
 const ATHLETES_KEY = 'jump-height-athletes';
+const FACING_KEY = 'jump-height-camera';
 const MAX_SESSIONS = 100;
 
 function read(key, fallback) {
@@ -34,6 +35,10 @@ export const saveUnit = (unit) => write(UNIT_KEY, unit);
 
 export const loadAthletes = () => { const n = Number(read(ATHLETES_KEY, 1)); return n >= 1 && n <= 3 ? Math.round(n) : 1; };
 export const saveAthletes = (n) => write(ATHLETES_KEY, n);
+
+// Which camera to start with: the front one by default, so athletes can read their result.
+export const loadFacing = () => (read(FACING_KEY, 'user') === 'environment' ? 'environment' : 'user');
+export const saveFacing = (f) => write(FACING_KEY, f);
 
 // Stored data is not trusted: the storage is shared by every page on this
 // origin, so anything that isn't a well-formed session is dropped.

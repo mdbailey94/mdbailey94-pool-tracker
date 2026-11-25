@@ -440,3 +440,32 @@ test('head rise: not reported without a head in view or a standing-tall referenc
   // The whole clip: forward pass has the reference, so the figure survives the merge.
   assert.ok(Number.isFinite(analyseRecording(samples).jumps[0].headRiseM));
 });
+
+// ---- live camera: a reading stays up before the next jump is looked for
+
+test('holdAfter: a jump during the hold is ignored, the next one after it counts', () => {
+  for (const fps of [30, 60]) for (let seed = 1; seed <= 4; seed++) {
+    const { samples, truth } = simulate({
+      seed: seed * 17 + fps, fps, noise: 0.008,
+      script: [stand(), { type: 'jump', height: 0.3 }, stand(0.3), { type: 'jump', height: 0.45 }, stand(3), { type: 'jump', height: 0.35 }, stand(1.2)],
+    });
+    const det = new JumpDetector({ holdAfter: 2 });
+    const jumps = [], statuses = [];
+    for (const s of samples) {
+      const r = det.push(s);
+      statuses.push([s.t, r.status]);
+      if (r.jump) jumps.push({ ...r.jump, at: s.t });
+    }
+    assert.equal(jumps.length, 2, `${fps} fps seed ${seed}: ${jumps.length} jumps (${det.lastReject})`);
+    assert.ok(Math.abs(jumps[0].heightM - truth[0].heightM) < 0.04, `first ${jumps[0].heightM}`);
+    assert.ok(Math.abs(jumps[1].heightM - truth[2].heightM) < 0.04, `third ${jumps[1].heightM} vs ${truth[2].heightM}`);
+    // The second jump came inside the hold and was not taken as a takeoff.
+    assert.ok(truth[1].takeoffT < jumps[0].at + 2);
+    // 'hold' is reported for the whole two seconds after the first reading.
+    const held = statuses.filter(([t]) => t > jumps[0].at && t < jumps[0].at + 2);
+    assert.ok(held.length && held.every(([, st]) => st === 'hold' || st === 'no-person'), `${fps} fps seed ${seed}: ${[...new Set(held.map(([, st]) => st))]}`);
+  }
+  // Without the hold, the same stream gives all three.
+  const { samples } = simulate({ seed: 5, fps: 60, noise: 0.008, script: [stand(), { type: 'jump', height: 0.3 }, stand(0.6), { type: 'jump', height: 0.45 }, stand(3), { type: 'jump', height: 0.35 }, stand(1.2)] });
+  assert.equal(run(new JumpDetector(), samples).jumps.length, 3);
+});

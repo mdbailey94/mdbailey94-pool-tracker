@@ -6,7 +6,8 @@ import {
   GUIDE, MAX_ATHLETES, TILTS, assignLanes, cameraElevation, framingHint, horizonTilt, laneBounds, placementAdvice, tiltFor,
 } from './lanes.js';
 import {
-  deleteSession, download, loadAthletes, loadSessions, loadUnit, newSessionId, saveAthletes, saveSession, saveUnit,
+  deleteSession, download, loadAthletes, loadFacing, loadSessions, loadUnit, newSessionId, saveAthletes, saveFacing,
+  saveSession, saveUnit,
   sessionCSV,
 } from './store.js';
 
@@ -28,6 +29,7 @@ const lanesEl = $('#lanes');
 const FEET = new Set([27, 28, 29, 30, 31, 32]);
 const LOW_FPS = 20;
 const TOO_SLOW_FPS = 12; // below this the detector cannot learn the ground level or time a flight
+const HOLD_S = 2; // a live reading stays up this long before the next jump is looked for
 
 const state = {
   mode: 'home',
@@ -38,8 +40,8 @@ const state = {
   fileMode: false,
   file: null,
   rate: null, // file mode: how many times slower than life the clip plays
-  facing: 'environment',
-  wide: true, // use the rear 0.5x camera when the phone has one
+  facing: loadFacing(), // the front camera unless the back one was used last
+  wide: true, // use the widest view the camera offers (0.5x)
   pose: null,
   athletes: loadAthletes(), // how many athletes share the screen, each in their own lane
   lanes: [], // per athlete: { detector, rec, status, hint, entry }
@@ -143,27 +145,27 @@ function showHome(message = '') {
   window.scrollTo(0, 0);
   const sessions = loadSessions();
   const camOk = cameraSupported();
+  const choice = (key, label, opts, current) => `<div class="field-row">
+        <span id="${key}-label">${label}</span>
+        <div class="seg" role="group" aria-labelledby="${key}-label">${opts.map(([v, text]) => `
+          <button type="button" data-${key}="${v}" aria-pressed="${current === v}">${text}</button>`).join('')}</div>
+      </div>`;
   homeEl.innerHTML = `
     <section class="card">
-      <h2>Measure your vertical jump</h2>
-      <p>Set the phone down, jump, and the app estimates how high you went from how long you were in the air.</p>
-      <div class="field-row">
-        <span id="ath-label">Athletes</span>
-        <div class="seg" role="group" aria-labelledby="ath-label">${Array.from({ length: MAX_ATHLETES }, (_, i) => `
-          <button type="button" data-ath="${i + 1}" aria-pressed="${state.athletes === i + 1}">${i + 1}</button>`).join('')}</div>
-      </div>
-      <div class="actions">
+      <p class="lead">Set the phone down, jump, and see how high you went.</p>
+      ${choice('ath', 'Athletes', Array.from({ length: MAX_ATHLETES }, (_, i) => [i + 1, String(i + 1)]), state.athletes)}
+      ${camOk ? choice('cam', 'Camera', [['user', 'Front'], ['environment', 'Back']], state.facing) : ''}
+      <div class="actions big-actions">
         <button class="btn" id="use-camera" ${camOk ? '' : 'disabled'}>Start camera</button>
         <label class="btn secondary file-btn">Use a video<input type="file" id="open-file" accept="video/*"></label>
       </div>
       ${camOk ? '' : '<p class="muted small" style="margin-top:10px">The camera needs a secure page (https). You can still use a recorded video.</p>'}
       <p class="form-error" id="home-error" role="alert" ${message ? '' : 'hidden'}>${esc(message)}</p>
-      <p class="muted small">A recorded video is more accurate than the live camera, most of all at 120 frames per second. Slow motion is fine: the app works out the frame rate and how much the clip was slowed.</p>
     </section>
-    <section class="card">
-      <h3>Setting up</h3>
+    <details class="card tips">
+      <summary>How to set up</summary>
       <div class="setup">
-        <svg class="setup-pic" viewBox="0 0 220 120" role="img" aria-label="Phone on its side on the ground, leaning back about 15 degrees, looking up at an athlete 2 to 3 metres away">
+        <svg class="setup-pic" viewBox="0 0 220 120" role="img" aria-label="Phone on its side on the ground, tilted so the camera looks up about 15 degrees at an athlete 2 to 3 metres away">
           <line x1="6" y1="104" x2="214" y2="104" class="pic-ground"/>
           <rect x="24" y="78" width="7" height="26" rx="2" transform="rotate(-15 27.5 104)" class="pic-phone"/>
           <path d="M32 90 L150 16 M32 90 L150 108" class="pic-view"/>
@@ -173,13 +175,14 @@ function showHome(message = '') {
           <text x="84" y="118" class="pic-text">2 to 3 m</text>
         </svg>
         <ol class="steps">
-          <li>Put the phone on the ground on its side, leaning back about ${TILTS.landscape.target}°, so it looks up at the athletes from 2 to 3 m away. Prop it so it cannot move. (Upright, lean it back about ${TILTS.portrait.target}°.)</li>
-          <li>Use the 0.5× wide camera. The app picks it for the live camera when the phone has one; for a video, record at 0.5×.</li>
+          <li>Stand the phone on the ground on its side, 2 to 3 m away, tilted so the camera looks up about ${TILTS.landscape.target}°. With the front camera, the athletes can read their result. Prop it so it cannot move.</li>
+          <li>The app uses the widest view the camera has (0.5× where there is one). For a video, record at 0.5×, ideally 120 frames per second; slow motion is fine.</li>
           <li>${state.athletes > 1 ? 'Each athlete stands in their own section of the screen, on' : 'Stand on'} the marker until it turns green. Hips, legs and feet must stay in view for the whole jump.</li>
-          <li>Jump and land on the same spot, with your legs as straight as they were at takeoff.</li>
+          <li>Jump and land on the same spot, legs as straight as at takeoff. Each result stays up for ${HOLD_S} seconds, then jump again.</li>
+          <li>Tap the screen for settings, the session list and Done.</li>
         </ol>
       </div>
-    </section>
+    </details>
     ${sessions.length ? `<section class="card">
       <h3>Recent sessions</h3>
       <ul class="plain history">${sessions.slice(0, 10).map((s) => {
@@ -193,7 +196,10 @@ function showHome(message = '') {
   homeEl.querySelectorAll('[data-ath]').forEach((b) => {
     b.onclick = () => { state.athletes = Number(b.dataset.ath); saveAthletes(state.athletes); showHome(); };
   });
-  $('#use-camera').onclick = () => startCamera('environment');
+  homeEl.querySelectorAll('[data-cam]').forEach((b) => {
+    b.onclick = () => { state.facing = b.dataset.cam; saveFacing(state.facing); showHome(); };
+  });
+  $('#use-camera').onclick = () => startCamera(state.facing);
   $('#open-file').onchange = (ev) => {
     const file = ev.target.files[0];
     ev.target.value = '';
@@ -266,9 +272,19 @@ function showDetail(id) {
 
 // -------------------------------------------------------------------- live
 
+// Ask for the whole screen (Android and desktop; iPhones go full screen when the app is
+// added to the home screen). Must be called from a tap.
+function goFullscreen() {
+  try { document.documentElement.requestFullscreen?.({ navigationUI: 'hide' })?.catch?.(() => {}); } catch { /* optional */ }
+}
+function leaveFullscreen() {
+  try { if (document.fullscreenElement) document.exitFullscreen?.()?.catch?.(() => {}); } catch { /* optional */ }
+}
+
 async function startCamera(facing) {
   if (state.opening) return; // a second tap while the permission prompt is up
   state.opening = true;
+  goFullscreen();
   primeAudio();
   watchTilt();
   state.fileMode = false;
@@ -280,6 +296,7 @@ async function startCamera(facing) {
     await enterLive(info);
   } catch (e) {
     state.source.close();
+    leaveFullscreen();
     homeError(cameraMessage(e));
   } finally {
     state.opening = false;
@@ -289,6 +306,7 @@ async function startCamera(facing) {
 async function startFile(file) {
   if (state.opening) return;
   state.opening = true;
+  goFullscreen();
   state.fileMode = true;
   state.file = file;
   try {
@@ -297,6 +315,7 @@ async function startFile(file) {
     await enterLive(info);
   } catch (e) {
     state.source.close();
+    leaveFullscreen();
     homeError(e.message || 'That video could not be opened.');
   } finally {
     state.opening = false;
@@ -329,7 +348,7 @@ function resetRun() {
   state.id = newSessionId();
   state.startedAt = new Date().toISOString();
   state.lanes = Array.from({ length: state.athletes }, () => ({
-    detector: new JumpDetector(), rec: [], status: null, hint: null, entry: null, shown: '',
+    detector: new JumpDetector(state.fileMode ? {} : { holdAfter: HOLD_S }), rec: [], status: null, hint: null, entry: null, shown: '',
   }));
   state.rate = null;
 }
@@ -339,6 +358,8 @@ async function enterLive(info) {
   document.body.classList.add('is-live');
   homeEl.hidden = true;
   liveEl.hidden = false;
+  liveEl.classList.toggle('file', state.fileMode);
+  closePanel();
   window.scrollTo(0, 0);
   resetRun();
   buildPanel();
@@ -374,7 +395,7 @@ function beginRun() {
   state.lanes.forEach((l) => l.detector.reset());
   setError('');
   state.source.start(onFrame);
-  setStatus('');
+  setStatus(state.fileMode ? 'Reading the video…' : '');
   updateFileControls();
 }
 
@@ -402,7 +423,7 @@ function onFrame(v, t) {
         const { status, jump } = lane.detector.push({ ...sample, t });
         lane.status = status;
         // Where to stand is only worth saying while the athlete is on the ground.
-        lane.hint = status === 'airborne' ? null : framingHint(entry, i, n, mirrored());
+        lane.hint = status === 'airborne' || status === 'hold' ? null : framingHint(entry, i, n, mirrored());
         if (jump) addJump(jump, i);
       }
     });
@@ -458,29 +479,31 @@ function buildPanel() {
   state.latest = null;
   const n = state.lanes.length;
   panel.innerHTML = `
-    <div class="status" id="status" role="status" aria-live="polite">Getting ready…</div>
-    <p class="form-error" id="live-error" role="alert" hidden></p>
-    <p class="notice small" id="turn" hidden>Turn the phone sideways so each athlete gets a wider section.</p>
-    ${state.fileMode ? '' : `<div class="tilt" id="tilt">
-      <div class="tilt-bar" aria-hidden="true"><i class="tilt-zone" id="tilt-zone"></i><i class="tilt-mark" id="tilt-mark"></i></div>
-      <span id="tilt-text"></span>
-    </div>`}
+    <div class="panel-head"><h2>Session</h2><button class="icon-close" id="panel-close" type="button" aria-label="Close">×</button></div>
     <section class="card result-card" id="result-card"></section>
-    <p class="notice small" id="fps-warn" hidden>The phone is processing few frames per second, so results will be less precise.</p>
     <section class="card" id="file-card" hidden>
       <div class="actions"><button class="btn secondary" id="file-go" disabled>Run again</button></div>
     </section>
     <section class="card">
-      <div class="bar"><h3 style="margin:0">This session</h3>${unitToggle()}</div>
+      <div class="bar"><h3 style="margin:0">Jumps</h3>${unitToggle()}</div>
       <ul class="jumps" id="jumps"></ul>
+    </section>
+    <section class="card">
+      <h3>Setup</h3>
+      ${state.fileMode ? '' : `<div class="tilt" id="tilt">
+        <div class="tilt-bar" aria-hidden="true"><i class="tilt-zone" id="tilt-zone"></i><i class="tilt-mark" id="tilt-mark"></i></div>
+        <span id="tilt-text"></span>
+      </div>
+      <div class="actions">
+        <button class="btn secondary" id="flip">${state.facing === 'user' ? 'Use back camera' : 'Use front camera'}</button>
+        <button class="btn secondary" id="lens" hidden></button>
+      </div>`}
       <p class="fps" id="fps"></p>
     </section>
-    <div class="bar">
-      ${state.fileMode ? '' : '<button class="btn secondary" id="flip">Flip camera</button><button class="btn secondary" id="lens" hidden></button>'}
-      <button class="btn" id="done">Done</button>
-    </div>`;
+    <button class="btn done-btn" id="done">Done</button>`;
   bindUnitToggle(panel);
   $('#done').onclick = finish;
+  $('#panel-close').onclick = closePanel;
   const flip = $('#flip');
   if (flip) flip.onclick = () => reopenCamera({ facing: state.facing === 'environment' ? 'user' : 'environment' });
   const lens = $('#lens');
@@ -491,12 +514,14 @@ function buildPanel() {
   }
   // One readout per athlete, laid over their section of the picture.
   lanesEl.style.setProperty('--lanes', n);
+  const chip = (i) => (state.fileMode && n === 1 ? '' : `<div class="lane-chip"><b>${i + 1}</b><span class="lane-status"></span></div>`);
   lanesEl.innerHTML = state.lanes.map((_, i) => `
     <div class="lane" data-lane="${i}">
-      <div class="lane-chip"><b>${i + 1}</b><span class="lane-status"></span></div>
+      ${chip(i)}
       <div class="lane-result" aria-label="Athlete ${i + 1}, latest jump"></div>
     </div>`).join('');
   lanesEl.classList.toggle('single', n === 1);
+  setStatus('');
   renderLanes();
   renderJumps();
   renderFps();
@@ -504,10 +529,36 @@ function buildPanel() {
   renderTurn();
 }
 
-const LANE_TEXT = { settling: 'Stand still…', ready: 'Ready. Jump!', airborne: 'In the air…' };
+// ------------------------------------------------------------ slide-out panel
+
+function openPanel() {
+  if (state.mode !== 'live') return;
+  liveEl.classList.add('panel-open');
+  panel.inert = false;
+  $('#scrim').hidden = false;
+  $('#menu-btn').setAttribute('aria-expanded', 'true');
+}
+
+function closePanel() {
+  liveEl.classList.remove('panel-open');
+  panel.inert = true;
+  $('#scrim').hidden = true;
+  $('#menu-btn').setAttribute('aria-expanded', 'false');
+}
+
+// A tap anywhere on the picture opens the panel; a tap outside it closes it.
+liveEl.addEventListener('click', (ev) => {
+  if (ev.target.closest('.panel, .hud-pill')) return;
+  if (ev.target.closest('#scrim')) { closePanel(); return; }
+  if (liveEl.classList.contains('panel-open')) closePanel(); else openPanel();
+});
+document.addEventListener('keydown', (ev) => { if (ev.key === 'Escape') closePanel(); });
+
+const LANE_TEXT = { settling: 'Stand still…', ready: 'Ready. Jump!', airborne: 'In the air…', hold: 'Got it' };
 
 // What an athlete should read in their lane right now, and how it is coloured.
 function laneState(lane) {
+  if (lane.status === 'hold') return { cls: 'hold', text: LANE_TEXT.hold };
   if (lane.status === 'airborne') return { cls: 'airborne', text: LANE_TEXT.airborne };
   if (lane.hint) return { cls: lane.entry ? 'fix' : 'empty', text: lane.hint };
   if (lane.status === 'ready') return { cls: 'ready', text: LANE_TEXT.ready };
@@ -516,34 +567,26 @@ function laneState(lane) {
 
 function renderLanes() {
   if (state.fileMode) return;
-  let ready = 0;
   state.lanes.forEach((lane, i) => {
     const { cls, text } = laneState(lane);
-    if (cls === 'ready' || cls === 'airborne') ready++;
     if (lane.shown === cls + text) return; // the picture updates far more often than the words
     lane.shown = cls + text;
     const el = lanesEl.children[i];
     if (!el) return;
     el.className = `lane ${cls}`;
-    el.querySelector('.lane-status').textContent = text;
+    const label = el.querySelector('.lane-status');
+    if (label) label.textContent = text;
   });
-  const n = state.lanes.length;
-  if (n === 1) {
-    const { cls, text } = laneState(state.lanes[0]);
-    setStatus(text, cls);
-  } else {
-    setStatus(`${ready} of ${n} athletes ready`, ready === n ? 'ready' : 'settling');
-  }
 }
 
-function setStatus(text, cls = '') {
-  const key = cls + text;
-  if (key === state.status) return;
-  state.status = key;
+// The line at the top of the screen: used for a video's progress and outcome. Live,
+// each athlete's own label says what is happening.
+function setStatus(text) {
+  if (text === state.status) return;
+  state.status = text;
   const el = $('#status');
-  if (!el) return;
-  el.className = `status ${cls}`;
-  el.textContent = text || 'Getting ready…';
+  el.hidden = !text;
+  el.textContent = text || '';
 }
 
 
@@ -660,7 +703,7 @@ const isLandscape = () => window.matchMedia('(orientation: landscape)').matches;
 
 function renderTilt() {
   const box = $('#tilt');
-  if (!box) return;
+  if (!box) { $('#tilt-hint').hidden = true; return; }
   const land = isLandscape();
   const { target, low, high } = tiltFor(land);
   const t = state.tilt;
@@ -668,12 +711,17 @@ function renderTilt() {
   const zone = $('#tilt-zone');
   zone.style.left = `${(low / 90) * 100}%`;
   zone.style.width = `${((high - low) / 90) * 100}%`;
+  const hint = $('#tilt-hint');
   if (!t) { // no sensor (or not allowed): a written tip instead
+    hint.hidden = true;
     box.className = 'tilt';
     $('#tilt-text').textContent = `Phone on the ground${land ? ' on its side' : ''}, leaning back about ${target}°.`;
     return;
   }
   const { ok, text } = placementAdvice(t.elevation, t.roll, land);
+  // Over the picture only while the angle needs fixing.
+  hint.hidden = ok || state.fileMode;
+  if (!ok) hint.textContent = `${text} · ${Math.round(t.elevation)}°, aim for about ${target}°`;
   box.className = `tilt live ${ok ? 'ok' : 'off'}`;
   $('#tilt-text').textContent = `${Math.round(t.elevation)}° (aim for about ${target}°) · ${text}`;
   $('#tilt-mark').style.left = `${Math.max(0, Math.min(100, (t.elevation / 90) * 100))}%`;
@@ -684,7 +732,7 @@ function renderLens() {
   const btn = $('#lens');
   if (!btn) return;
   const src = state.source;
-  btn.hidden = state.facing !== 'environment' || !src.hasWide;
+  btn.hidden = !src.hasWide;
   btn.textContent = src.lens === 'wide' ? 'Use 1× lens' : 'Use 0.5× lens';
 }
 
@@ -724,6 +772,7 @@ function updateFileControls() {
 
 async function runFile() {
   primeAudio();
+  closePanel();
   if (state.finished || state.frames) await restartFile(); else beginRun();
 }
 
@@ -755,6 +804,9 @@ async function reopenCamera({ facing = state.facing, wide = state.wide } = {}) {
     const info = await state.source.openCamera({ facing, wide });
     state.facing = facing;
     state.wide = wide;
+    saveFacing(facing);
+    const flip = $('#flip');
+    if (flip) flip.textContent = facing === 'user' ? 'Use back camera' : 'Use front camera';
     state.lanes.forEach((l) => { l.detector.reset(); l.entry = null; l.status = null; l.hint = null; });
     state.tilt = null; // the two cameras point opposite ways
     sizeStage(info);
@@ -794,10 +846,7 @@ function videoFinished() {
   analyseFile();
   renderFps();
   const n = state.jumps.length;
-  const el = $('#status');
-  el.className = 'status';
-  el.textContent = n ? `Video finished. ${n} jump${n === 1 ? '' : 's'} found.` : 'Video finished. No jump found.';
-  state.status = 'finished';
+  setStatus(n ? `${n} jump${n === 1 ? '' : 's'} found` : 'No jump found');
   if (!n) {
     $('#result-card').insertAdjacentHTML('beforeend', `<ul class="notes">
       <li>Keep hips, legs and feet in view for the whole jump.</li>
@@ -805,6 +854,7 @@ function videoFinished() {
       <li>Hold the phone still, or prop it up.</li></ul>`);
   }
   updateFileControls();
+  openPanel();
 }
 video.addEventListener('ended', videoFinished);
 
@@ -909,6 +959,10 @@ function finish() {
   state.lanes.forEach((l) => { l.entry = null; });
   state.fps = null;
   lanesEl.innerHTML = '';
+  closePanel();
+  setStatus('');
+  ['#tilt-hint', '#fps-warn', '#turn', '#live-error'].forEach((sel) => { $(sel).hidden = true; });
+  leaveFullscreen();
   ctx.clearRect(0, 0, overlay.width, overlay.height);
   const id = state.id;
   const saved = state.jumps.length > 0;

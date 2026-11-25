@@ -127,8 +127,8 @@ export const tiltFor = (landscape) => (landscape ? TILTS.landscape : TILTS.portr
 export function placementAdvice(elevation, roll, landscape = false) {
   if (!Number.isFinite(elevation)) return { ok: false, text: '' };
   const { low, high } = tiltFor(landscape);
-  if (elevation < low) return { ok: false, text: 'Lean the phone back more' };
-  if (elevation > high) return { ok: false, text: 'Stand the phone up more' };
+  if (elevation < low) return { ok: false, text: 'Tilt the camera up more' };
+  if (elevation > high) return { ok: false, text: 'Tilt the camera down a little' };
   if (Number.isFinite(roll) && Math.abs(roll) > LEVEL) return { ok: false, text: 'Level the phone: one side is higher' };
   return { ok: true, text: 'Phone angle is good' };
 }

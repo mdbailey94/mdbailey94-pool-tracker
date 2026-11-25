@@ -54,33 +54,32 @@ export class VideoSource {
     orphaned(stream);
     this.lens = 'standard';
     this.hasWide = false;
-    if (facing === 'environment') {
-      // Camera names are only readable once permission is given, so the wide lens is
-      // looked for now and, if wanted, swapped in.
-      let track = stream.getVideoTracks()[0];
-      const ultra = findWideCamera(await navigator.mediaDevices.enumerateDevices().catch(() => []));
-      const zoom = track.getCapabilities?.().zoom;
-      const canZoomOut = Boolean(zoom && zoom.min < 1);
-      this.hasWide = Boolean(ultra) || canZoomOut;
-      if (wide && ultra && ultra.deviceId !== track.getSettings().deviceId) {
-        let s2 = null;
-        try {
-          s2 = await navigator.mediaDevices.getUserMedia({ audio: false, video: { deviceId: { exact: ultra.deviceId }, ...want } });
-        } catch { /* keep the standard lens */ }
-        if (s2) {
-          stream.getTracks().forEach((t) => t.stop());
-          stream = s2;
-          track = stream.getVideoTracks()[0];
-          this.lens = 'wide';
-        }
-      } else if (wide && ultra) {
+    // Camera names are only readable once permission is given, so the wide lens is
+    // looked for now and, if wanted, swapped in. The back camera's 0.5x lens is a camera
+    // of its own on iPhones; elsewhere, and for the front camera, zooming out is the way.
+    let track = stream.getVideoTracks()[0];
+    const ultra = facing === 'environment'
+      ? findWideCamera(await navigator.mediaDevices.enumerateDevices().catch(() => [])) : undefined;
+    const zoom = track.getCapabilities?.().zoom;
+    const canZoomOut = Boolean(zoom && zoom.min < 1);
+    this.hasWide = Boolean(ultra) || canZoomOut;
+    if (wide && ultra && ultra.deviceId !== track.getSettings().deviceId) {
+      let s2 = null;
+      try {
+        s2 = await navigator.mediaDevices.getUserMedia({ audio: false, video: { deviceId: { exact: ultra.deviceId }, ...want } });
+      } catch { /* keep the standard lens */ }
+      if (s2) {
+        stream.getTracks().forEach((t) => t.stop());
+        stream = s2;
+        track = stream.getVideoTracks()[0];
         this.lens = 'wide';
-      } else if (wide && canZoomOut) {
-        // Phones that present their rear lenses as one camera: zoom out as far as it goes.
-        try { await track.applyConstraints({ advanced: [{ zoom: zoom.min }] }); this.lens = 'wide'; } catch { /* keep 1x */ }
       }
-      orphaned(stream);
+    } else if (wide && ultra) {
+      this.lens = 'wide';
+    } else if (wide && canZoomOut) {
+      try { await track.applyConstraints({ advanced: [{ zoom: zoom.min }] }); this.lens = 'wide'; } catch { /* keep 1x */ }
     }
+    orphaned(stream);
     this.stream = stream;
     this.video.playbackRate = 1;
     this.live = true;

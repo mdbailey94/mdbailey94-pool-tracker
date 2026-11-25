@@ -97,13 +97,13 @@ test('placementAdvice: about 15 degrees on its side, about 45 upright, and level
   // On its side (landscape, 0.5x camera).
   assert.equal(placementAdvice(15, 0, true).ok, true);
   assert.equal(placementAdvice(22, 0, true).ok, true);
-  assert.match(placementAdvice(4, 0, true).text, /back more/);
-  assert.match(placementAdvice(45, 0, true).text, /up more/); // good upright, too far back on its side
+  assert.match(placementAdvice(4, 0, true).text, /up more/);
+  assert.match(placementAdvice(45, 0, true).text, /down/); // good upright, too far back on its side
   assert.match(placementAdvice(15, 9, true).text, /Level/);
   // Upright (portrait): the default.
   assert.equal(placementAdvice(45, 0).ok, true);
-  assert.match(placementAdvice(15, 0).text, /back more/);
-  assert.match(placementAdvice(80, 0, false).text, /up more/);
+  assert.match(placementAdvice(15, 0).text, /up more/);
+  assert.match(placementAdvice(80, 0, false).text, /down/);
   assert.equal(placementAdvice(NaN, 0, true).text, '');
   assert.deepEqual([tiltFor(true).target, tiltFor(false).target], [15, 45]);
 });
