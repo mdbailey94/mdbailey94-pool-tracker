@@ -53,7 +53,9 @@ test('heightFromFlightTime', () => {
 const ACCURACY = [
   // fps, noise, mean, p90, max (cm), |bias| (cm), misses allowed
   [60, 0.004, 0.6, 1.1, 1.7, 0.5, 0],
-  [60, 0.008, 0.7, 1.6, 2.5, 0.5, 0],
+  // max was 2.5 before takeoff and landing were kept between the frames that show the
+  // feet on and off the ground: that raised one outlier to 2.8 and lowered the mean and p90.
+  [60, 0.008, 0.7, 1.6, 2.9, 0.5, 0],
   // p90 was 2.0 before posture adjustments: with landmarks this noisy the hip-drop measure
   // sometimes sees a bent landing that is not there. The mean is unchanged, and real bent
   // landings go from reading 4 cm high to under 1 (see the posture tests below).
@@ -468,4 +470,43 @@ test('holdAfter: a jump during the hold is ignored, the next one after it counts
   // Without the hold, the same stream gives all three.
   const { samples } = simulate({ seed: 5, fps: 60, noise: 0.008, script: [stand(), { type: 'jump', height: 0.3 }, stand(0.6), { type: 'jump', height: 0.45 }, stand(3), { type: 'jump', height: 0.35 }, stand(1.2)] });
   assert.equal(run(new JumpDetector(), samples).jumps.length, 3);
+});
+
+// ---- push-off: the rise between standing tall and takeoff, which flight time leaves out
+
+test('push-off rise: measured from standing tall to takeoff, added in the jump-and-reach figure', () => {
+  for (const fps of [60, 120]) for (const heelRise of [0.04, 0.07, 0.1]) {
+    const errs = [];
+    for (const h of [0.25, 0.4, 0.55]) for (let seed = 1; seed <= 6; seed++) {
+      const { samples, truth } = simulate({ seed: seed * 41 + fps, fps, noise: 0.008, smoothing: {}, script: [stand(1.5), { type: 'jump', height: h, heelRise }, stand(1.2)] });
+      const j = run(new JumpDetector(), samples).jumps[0];
+      assert.ok(j && Number.isFinite(j.pushOffM), `${fps} fps heels ${heelRise} seed ${seed}: no push-off`);
+      assert.ok(Math.abs(j.reachM - (j.heightM + j.pushOffM)) < 1e-12);
+      assert.ok(j.reachLowM <= j.reachM && j.reachM <= j.reachHighM);
+      errs.push(j.reachM - truth[0].riseM); // riseM: from standing tall to the top
+    }
+    const mean = errs.reduce((a, b) => a + Math.abs(b), 0) / errs.length;
+    assert.ok(mean < 0.02, `${fps} fps heels ${heelRise}: off by ${(mean * 100).toFixed(1)} cm on average`);
+  }
+  // Seen only backwards (clip starts mid-crouch), there is no standing-tall reference.
+  const { samples, truth } = simulate({ seed: 9, fps: 60, noise: 0.008, smoothing: {}, script: [stand(1.5), { type: 'jump', height: 0.4 }, stand(1.2)] });
+  const late = analyseRecording(samples.filter((s) => s.t >= truth[0].takeoffT - 0.2)).jumps[0];
+  assert.ok(late && Number.isNaN(late.pushOffM) && Number.isNaN(late.reachM));
+});
+
+// Takeoff and landing are kept between the frames that show the feet on the ground and
+// clearly off it. Checked on real pose-model output for clips with a known flight time,
+// stepped through frame by frame as the app does (a photo of a person moved along a
+// gravity arc, so the timing is known exactly).
+test('frame bracket: known-truth clips read within 13 ms; averaging the two frames reads short', async () => {
+  const { readFileSync } = await import('node:fs');
+  for (const [name, truth] of [['stepped-30fps-600ms', 0.6], ['stepped-60fps-450ms', 0.45]]) {
+    const samples = JSON.parse(readFileSync(new URL(`./fixtures/${name}.json`, import.meta.url)));
+    const j = analyseRecording(samples).jumps[0];
+    const mid = analyseRecording(samples, { options: { contactMode: 'mid' } }).jumps[0];
+    assert.ok(Math.abs(j.flightTime - truth) < 0.013, `${name}: ${j.flightTime}`);
+    // The "clearly up" frame comes a little after takeoff and before landing, so the plain
+    // midpoint of the two frames lands inside the flight at both ends.
+    assert.ok(mid.flightTime < truth - 0.01, `${name}: midpoint ${mid.flightTime}`);
+  }
 });

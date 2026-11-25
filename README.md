@@ -60,8 +60,11 @@ its size, and only the true play rate gives a person-sized body. And because a j
 backwards, the clip is also read in reverse, so standing still after the landing serves as well as standing
 still before the jump.
 
-Takeoff and landing usually fall between two frames. The detector estimates where between them, so the timing
-is finer than the frame rate. More frames per second still helps.
+Takeoff and landing usually fall between two frames. The app finds, at each end, the last frame with a foot on
+the ground and the first with both feet clearly up: the true moment lies between them. Within that pair it
+uses the arc the feet follow in the air to place the moment more finely, and it never lets the estimate fall
+outside the pair. Simply averaging the two frames was tried and reads short by 15 to 35 ms (2 to 5 cm),
+because the "clearly up" frame comes a little after takeoff and a little before landing.
 
 Flight time gives the height exactly only if you take off and land in the same posture. The formula assumes
 your body is in the same position at both moments. Two common departures are measured and allowed for:
@@ -90,6 +93,15 @@ place in the picture and the timing cannot be trusted.
 
 ## Accuracy
 
+**Flight time and jump-and-reach measure different things.** Flight time gives how far you rose after your
+feet left the ground. A jump-and-reach test (a Vertec, or touching a wall) measures from standing flat-footed,
+so it also counts rising onto your toes before takeoff, and it usually reads several centimetres higher. Both
+can be right. To match a jump-and-reach test, do a few jumps measured both ways and set the **jump-and-reach
+adjustment** in the side panel to the average difference; it is added to every reading, shown with it, and
+recorded in the CSV. The app also measures the rise onto the toes directly (push_off_cm in the CSV), but on
+real footage the pose model seems to underestimate it, so it is not added automatically.
+
+
 Accuracy on real people has not been validated yet. Treat the numbers as an estimate. Before relying on
 them, compare against a known measure, such as a jump mat or a wall reach test, and see how far apart they are.
 
@@ -106,15 +118,15 @@ What has been checked:
 - Simulated jumps (15 to 80 cm, with landmark jitter, uneven frame timing and dropped frames): the average
   error is about 0.6 cm at 60 frames per second and 0.9 cm at 30, with worst cases of about 2 cm and 4 cm.
   Short jumps at low frame rates are the least precise.
-- Test clips with a known flight time, run through the whole app with the real pose model: readings were
-  between 0.1 cm low and 2.1 cm high. The clips are a photo of a person moved along a gravity arc, so they
-  test timing but not real body movement.
-- Below about 12 frames per second the app cannot time a jump live. Use a recorded video instead: a file
-  is held on each frame while it is measured, however slow the device. The app works out a file's frame
-  rate from its first frames, shows it, and sets the playback speed so that no frame is skipped (up to
-  240 frames per second on a 60 Hz screen).
-- One real side-on clip (60 frames per second): the app's takeoff and landing agree with the frames, read
-  by eye, to within about one frame at each end.
+- Test clips with a known flight time, stepped through frame by frame with the real pose model: 120 fps read
+  44.3 cm for a true 44.1, 60 fps 44.9, 30 fps 45.3, and a short 24.8 cm jump at 60 fps read 26.1. Every 95%
+  range held the true height. The clips are a photo of a person moved along a gravity arc, so they test timing
+  but not real body movement.
+- A video is stepped through frame by frame, so every frame is measured and the same clip always gives the
+  same reading, however slow the device. (Before, the clip was played through and frames were skipped
+  unpredictably; one real clip read anywhere from 50.5 to 59.3 cm on repeated runs.) The app works out the
+  frame rate from the first frames and shows it.
+- Below about 12 frames per second the app cannot time a jump live. Use a recorded video instead.
 
 Results are better with steady lighting, a still phone, a plain background, tight clothing and a high frame
 rate. The app shows the frames per second it is processing and warns if that falls below about 20.
