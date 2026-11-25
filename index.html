@@ -20,19 +20,30 @@
     <div id="home"></div>
 
     <div id="live" class="live" hidden>
-      <div class="stage-col">
-        <div class="stage" id="stage">
-          <video id="video" playsinline muted></video>
-          <canvas id="overlay"></canvas>
-          <div class="lanes" id="lanes"></div>
-          <div class="loading" id="loading" hidden>
-            <div class="spinner" aria-hidden="true"></div>
-            <p><b>Loading the pose model…</b></p>
-            <p class="small">The first load downloads about 15 MB.</p>
-          </div>
+      <div class="stage" id="stage">
+        <video id="video" playsinline muted></video>
+        <canvas id="overlay"></canvas>
+        <div class="lanes" id="lanes"></div>
+        <div class="loading" id="loading" hidden>
+          <div class="spinner" aria-hidden="true"></div>
+          <p><b>Loading the pose model…</b></p>
+          <p class="small">The first load downloads about 15 MB.</p>
         </div>
       </div>
-      <div class="panel" id="panel"></div>
+      <div class="hud" id="hud">
+        <div class="hud-status" id="status" role="status" aria-live="polite" hidden></div>
+        <button class="menu-btn" id="menu-btn" type="button" aria-label="Settings and results" aria-controls="panel" aria-expanded="false">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+        </button>
+        <div class="hud-pills">
+          <p class="hud-pill error" id="live-error" role="alert" hidden></p>
+          <p class="hud-pill" id="tilt-hint" hidden></p>
+          <p class="hud-pill" id="turn" hidden>Turn the phone sideways so each athlete gets a wider section.</p>
+          <p class="hud-pill" id="fps-warn" hidden></p>
+        </div>
+      </div>
+      <div class="scrim" id="scrim" hidden></div>
+      <aside class="panel" id="panel" aria-label="Settings and results" inert></aside>
     </div>
   </main>
 

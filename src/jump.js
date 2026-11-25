@@ -13,6 +13,7 @@ export function heightFromFlightTime(T) {
 const DEFAULTS = {
   settleWindow: 0.5, // s of standing still used to learn the ground level
   minSettleSamples: 5,
+  holdAfter: 0, // s a reading stays up before the next jump is looked for (the live camera uses 2)
   stillHips: true, // hips must be still too while learning the ground (live); off for recordings
   straightLeg: 0.96, // hip-to-ankle reach over leg length that counts as standing tall (head reference)
   tallLeg: 0.9, // and leg length then, as a share of leg length in flight
@@ -126,19 +127,36 @@ export class JumpDetector {
     this.flight = null; // {start, land, gaps}
     this.lastSeen = -Infinity;
     this.lastReject = null; // why the last candidate was not counted (for debugging / UI hints)
+    this.holding = false; // a reading is on screen; no new jump is looked for
+    this.holdUntil = -Infinity;
   }
 
   status() {
+    if (this.holding) return 'hold';
     return this.phase === 'landed' ? 'ready' : this.phase;
   }
 
+  // With holdAfter set, a reading stays up for that long before the next jump is looked
+  // for, so the athlete has time to read it. A jump made during the hold is ignored; the
+  // next one counts only from the ground, once the hold is over.
   push(sample) {
+    const r = this.step(sample);
+    if (r.jump && this.opt.holdAfter > 0) {
+      this.holding = true;
+      this.holdUntil = sample.t + this.opt.holdAfter;
+      if (this.flight) { this.flight = null; this.phase = this.base ? 'ready' : 'settling'; } // a rebound already in the air
+      if (r.status !== 'no-person') r.status = 'hold';
+    }
+    return r;
+  }
+
+  step(sample) {
     const o = this.opt, s = sample ?? {};
     const t = s.t;
     const ok = s.visible && [t, s.footL, s.footR, s.hipY, s.bodyLen].every(Number.isFinite) && s.bodyLen > 0;
     const gap = t - this.lastSeen;
     let jump = null;
-    if (this.flight && gap > o.maxGap) {
+    if (this.flight && gap > o.maxGap && !this.holding) {
       // Losing sight after touchdown (stepping away, motion blur) must not cost a
       // flight that is already complete: score it with the ground contact seen so far.
       if (this.phase === 'landed') jump = this.finish(Infinity);
@@ -162,6 +180,17 @@ export class JumpDetector {
     this.buf.push(p);
     while (this.buf.length && this.buf[0].t < t - (o.maxFlight + o.settleWindow + 1)) this.buf.shift();
 
+    if (this.holding) {
+      // Keep the ground level current, but take no takeoff until the hold is over and
+      // the athlete is standing.
+      if (this.phase === 'settling') this.trySettle(t);
+      else if (this.phase === 'ready') {
+        this.checkDrift(t);
+        if (this.phase === 'ready' && !this.bothUp(p)) this.trySettle(t);
+      }
+      if (t >= this.holdUntil && this.phase === 'ready' && !this.bothUp(p)) this.holding = false;
+      return { status: this.status(), jump: null };
+    }
     if (this.phase === 'settling') this.trySettle(t);
     else if (this.phase === 'ready') {
       if (this.bothUp(p)) this.takeoff(p);
@@ -181,7 +210,7 @@ export class JumpDetector {
       if (rebound && t - this.flight.land < 0.1) { this.phase = 'airborne'; this.flight.land = NaN; }
       else if (rebound || t >= this.flight.land + o.postWindow) {
         jump = this.finish(rebound ? t : Infinity);
-        if (rebound && this.phase === 'ready') this.takeoff(p);
+        if (rebound && this.phase === 'ready' && !(o.holdAfter > 0)) this.takeoff(p);
       }
     }
     return { status: this.status(), jump };
