@@ -715,7 +715,7 @@ function renderTilt() {
   if (!t) { // no sensor (or not allowed): a written tip instead
     hint.hidden = true;
     box.className = 'tilt';
-    $('#tilt-text').textContent = `Phone on the ground${land ? ' on its side' : ''}, leaning back about ${target}°.`;
+    $('#tilt-text').textContent = `Phone on the ground${land ? ' on its side' : ''}, camera tilted up about ${target}°.`;
     return;
   }
   const { ok, text } = placementAdvice(t.elevation, t.roll, land);
