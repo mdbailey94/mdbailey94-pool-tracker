@@ -85,7 +85,17 @@ export async function createPoseTracker({ numPoses = 1 } = {}) {
     landmarker = await make('CPU');
   }
 
-  let lastMs = -1, offset = 0;
+  // One practice run on a blank picture: the first inference compiles the graphics
+  // programs, which takes seconds on a phone. Done here, while the model is loaded in the
+  // background, it does not hold up the first real frame.
+  try {
+    const blank = document.createElement('canvas');
+    blank.width = 256; blank.height = 144;
+    const g = blank.getContext('2d');
+    g.fillStyle = '#777'; g.fillRect(0, 0, blank.width, blank.height);
+    landmarker.detectForVideo(blank, 0);
+  } catch { /* a warm-up only */ }
+  let lastMs = 0, offset = 0;
 
   // t in seconds. y values are returned raw: no temporal smoothing, because
   // filtering would lag/blur the takeoff and landing edges the jump timing uses.
