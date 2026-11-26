@@ -206,6 +206,7 @@ function showHome(message = '') {
     b.onclick = () => { state.facing = b.dataset.cam; saveFacing(state.facing); showHome(); };
   });
   $('#use-camera').onclick = () => startCamera(state.facing);
+  warmPose();
   $('#open-file').onchange = (ev) => {
     const file = ev.target.files[0];
     ev.target.value = '';
@@ -380,18 +381,63 @@ async function enterLive(info) {
   if (state.pose) beginRun(); // a file starts by itself: there is nothing to choose first
 }
 
+// The pose model takes a few seconds to start even when its files are already on the
+// phone, so it is started in the background on the home screen and kept running between
+// sessions: after the first time, Start camera begins tracking straight away.
+// n = how many bodies to look for; a different number needs a fresh model.
+function loadPose(n) {
+  if (state.pose && state.poseFor === n) return Promise.resolve(state.pose);
+  if (state.posePromise && state.poseFor === n) return state.posePromise;
+  const old = state.pose;
+  state.pose = null;
+  state.poseFor = n;
+  const promise = (async () => {
+    state.poseModule ||= await import('./pose.js');
+    try { old?.close(); } catch { /* already gone */ }
+    const tracker = await state.poseModule.createPoseTracker({ numPoses: n });
+    if (state.posePromise !== promise) { tracker.close(); throw new Error('superseded'); }
+    state.pose = tracker;
+    return tracker;
+  })();
+  state.posePromise = promise;
+  promise.catch(() => { if (state.posePromise === promise) { state.posePromise = null; state.poseFor = null; } });
+  return promise;
+}
+
+// Whether the model files are already stored on this device (so nothing is downloaded).
+async function modelStored() {
+  try {
+    if (!('caches' in window)) return false;
+    const base = new URL('vendor/mediapipe/', location.href).href;
+    const hits = await Promise.all(['vision_wasm_internal.wasm', 'pose_landmarker_lite.task'].map((f) => caches.match(base + f)));
+    return hits.every(Boolean);
+  } catch {
+    return false;
+  }
+}
+
 async function ensurePose() {
-  if (state.pose) return;
+  if (state.pose && state.poseFor === state.athletes) return;
+  const stored = await modelStored();
+  $('#loading-title').textContent = stored ? 'Starting the pose model…' : 'Downloading the pose model…';
+  $('#loading-note').textContent = stored ? '' : 'About 15 MB, the first time only.';
   loadingEl.hidden = false;
   setError('');
   try {
-    state.poseModule ||= await import('./pose.js');
-    state.pose = await state.poseModule.createPoseTracker({ numPoses: state.athletes });
+    await loadPose(state.athletes);
   } catch (e) {
     setError(`The pose model could not be loaded. ${e?.message || ''} Check your connection and try again.`, true);
   } finally {
     loadingEl.hidden = true;
   }
+}
+
+// Start the model in the background while the home screen is up.
+function warmPose() {
+  clearTimeout(state.warmTimer);
+  state.warmTimer = setTimeout(() => {
+    if (state.mode === 'home') loadPose(state.athletes).catch(() => { /* tried again on Start */ });
+  }, 800);
 }
 
 function beginRun() {
@@ -988,8 +1034,7 @@ function finish() {
   else if (state.running) state.lanes.forEach((l, i) => { const last = l.detector.flush(); if (last) addJump(last, i); });
   state.running = false;
   state.source.close();
-  state.pose?.close();
-  state.pose = null;
+  // The pose model is kept running for the next session (see loadPose).
   state.release?.();
   state.release = null;
   unwatchTilt();
